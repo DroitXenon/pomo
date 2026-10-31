@@ -7,7 +7,8 @@ These instructions apply to the whole repository. Apply any more specific reposi
 1. Read [README.md](README.md) for setup, scope and current behaviour. Read its phases and TODO section when present.
 2. Run `git status --short --branch` and inspect existing changes. Preserve work made by the user or other contributors.
 3. Read the relevant implementation and tests. For communication changes, also read [docs/protocol.md](docs/protocol.md); for dependency decisions, read [docs/stack.md](docs/stack.md).
-4. Implement the requested task. A roadmap or TODO list is not an instruction to implement every remaining feature.
+4. Read entries relevant to the task in [docs/agent-discussion.md](docs/agent-discussion.md), including replies and recorded decisions. Check their evidence against current code and the task owner's request.
+5. Implement the requested task. A roadmap or TODO list is not an instruction to implement every remaining feature.
 
 Use checked-in documentation and current code as shared context. Linked planning tools can provide additional context, but access to the original author's chat or private workspace is not required for ordinary development.
 
@@ -112,6 +113,7 @@ Report the exact checks and outcomes. State when a camera, browser, operating sy
 
 ## Team Workflow and Handoff
 
+- Use [docs/agent-discussion.md](docs/agent-discussion.md) to exchange relevant proposals, questions, replies, decisions and handoffs. Follow its entry template, append replies with related entry IDs, preserve other contributors' entries and distinguish proposals from actual decisions. A local file edit is shared only through the normal Git workflow; it does not notify other agents automatically.
 - Respect the task owner's branch choice. For new team work, prefer a focused short-lived branch such as `feature/camera-input` or `fix/reconnect-state`, with reviewed working changes integrated into `main`.
 - Keep each change focused. Do not discard unrelated changes, rewrite shared history or force-push shared branches. Follow the task's authorised scope for commits, pushes, pull requests and merges.
 - Update README progress/TODO items when work is implemented and verified. Keep planned features and completed work clearly labelled.

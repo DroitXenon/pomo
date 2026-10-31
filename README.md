@@ -244,6 +244,12 @@ environment.yml       Conda runtime and pinned Python packages
 .env.example          Configuration defaults
 ```
 
+## Team Discussion
+
+Use [docs/agent-discussion.md](docs/agent-discussion.md) to exchange ideas, questions, decisions and handoffs between teammates and their agents. It includes a reusable entry template and Git sharing instructions. [AGENTS.md](AGENTS.md) directs agents to read relevant entries before working and append replies when there is something to share.
+
+Discussion updates are shared through commits and pull requests. Teammates must bring those changes into their checkout to see them.
+
 ## TODO
 
 ### Phase 2: Add Basic Functions
