@@ -116,12 +116,13 @@ a fresh visible-face baseline before further absence reminders. No reminder is
 triggered solely by waiting without fresh observations. Pausing releases capture
 and clears evidence.
 
-The camera panel shows face presence, quality reasons, absence duration
-and selected facial movement scores. Head direction and yaw/pitch/roll angles are estimated automatically relative to
+The camera panel shows face presence, quality reasons and absence duration. Head direction and yaw/pitch/roll angles are estimated automatically relative to
 the camera. Head direction and blendshape scores do not trigger reminders or establish
 attention, emotion or identity. The face box is a development overlay.
 
-The detection details separate **Eye movement** and **Mouth movement**:
+Eye movement, Iris vertical offsets, Vertical eye signals and Mouth movement
+rows are hidden in the frontend. Detection and snapshot data remain available.
+The hidden eye/mouth rows retain this format:
 
 ```text
 Eye movement: eyeLeft: closed · eyeRight: right · eyeBlinkLeft: 1.00 · eyeBlinkRight: 0.48
@@ -143,8 +144,8 @@ appears off-center between asymmetric eyelids.
 MediaPipe's per-eye up/down coefficients provide corroboration: at least 0.30,
 and 0.10 above the opposite signal, allows a half-sized measured excursion in the
 same direction. A model coefficient alone cannot turn centered geometry into up.
-**Iris vertical offsets** and **Vertical eye signals** in Detection details expose
-both measurements for webcam evaluation. These are not gaze probabilities.
+**Iris vertical offsets** and **Vertical eye signals** retain both measurements
+in hidden diagnostic rows for webcam evaluation. These are not gaze probabilities.
 
 These are coarse iris-position estimates, not screen-gaze coordinates, and do not
 trigger reminders or distraction decisions. The supported head-angle range is

@@ -112,3 +112,12 @@ environment with Python 3.13.18, OpenCV contrib 5.0.0.93 and MediaPipe 1.2.0.
   Eye movement and mouth movement have separate frontend diagnostics. Iris positions
   are approximate and do not establish screen gaze. Facial movement scores do not establish
   attention, emotion or identity and do not trigger reminders.
+
+
+## Diagnostic row visibility — 2 November 2026
+
+Implemented a hidden container for Eye movement, Iris vertical offsets, Vertical
+eye signals and Mouth movement. Observation generation, transport and existing
+rendering hooks remain active. An HTML parser check confirmed all four rows have
+a hidden ancestor while face presence, head direction, head angles and absence
+remain visible. `git diff --check` passed. Real-browser appearance was not tested.

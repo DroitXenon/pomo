@@ -145,7 +145,9 @@ All connected simulator clients
   details. Repeated snapshots do not repaint unchanged expression/title content or
   reset idle video sources. There is no full-page reload command in the app.
 
-Eye movement diagnostics show subject-left/right iris direction (`center`, `left`,
+Eye movement, Iris vertical offsets, Vertical eye signals and Mouth movement
+rows are hidden in the frontend; observation generation and snapshots remain active.
+The hidden eye movement diagnostics retain subject-left/right iris direction (`center`, `left`,
 `right`, `up`, `down`, `closed`, `unknown`) followed by blink scores. Mouth movement diagnostics
 show jaw opening and left/right smile scores. Eye-local axes account for head roll;
 strong head yaw/pitch and invalid measurements yield unknown. A detected blink or
@@ -157,8 +159,8 @@ by eye width (up negative, down positive), with a default threshold of 0.08. It 
 not assume that neutral iris position is the midpoint of the eyelid opening.
 Qualified MediaPipe up/down coefficients (at least 0.30 and 0.10 above the opposite)
 permit a half-sized displacement in the same direction. Coefficients cannot force
-up/down when geometry is centered or points the opposite way. Detection details
-shows Iris vertical offsets and Vertical eye signals for webcam evaluation.
+up/down when geometry is centered or points the opposite way. Hidden diagnostic rows
+retain Iris vertical offsets and Vertical eye signals for webcam evaluation.
 
 ### Iris availability and blink interpretation
 
