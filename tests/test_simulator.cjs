@@ -173,3 +173,13 @@ test('signed iris offsets are visible for center and upward evaluation',t=>{
   message(state);
   assert.equal(node('eye-vertical-offsets').textContent,'eyeLeft: — · eyeRight: —');
 });
+
+test('absence duration and possible-absence status render from the same snapshot',t=>{
+  const {node,state,message}=setup(t);
+  state.observation={presence:'not_detected',reason:'no_face'};
+  state.behaviour={status:'possible_absence',armed:false,absence_seconds:2.5,reminder_active:false};
+  message(state);
+  assert.equal(node('absence-duration').textContent,'2.5 s');
+  assert.equal(node('detection-status').textContent,'Possible absence');
+  assert.equal(node('screen').dataset.display,'ready');
+});

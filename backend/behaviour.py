@@ -50,16 +50,10 @@ class Behaviour:
                 self.status = 'confirming_face'
         else:
             self.present_since = None
-            if not self.armed:
-                self.status = 'awaiting_face'
-                return
-            if self.reminder_active:
-                self.status = 'reminding'
-                return
             if self.absence_since is None:
                 self.absence_since = at
             elapsed = at - self.absence_since
-            if elapsed >= self.config.absence_seconds:
+            if self.reminder_active or (self.armed and elapsed >= self.config.absence_seconds):
                 self.reminder_active = True
                 self.status = 'reminding'
             elif elapsed >= self.config.tracking_loss_grace_seconds:

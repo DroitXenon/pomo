@@ -121,3 +121,24 @@ eye signals and Mouth movement. Observation generation, transport and existing
 rendering hooks remain active. An HTML parser check confirmed all four rows have
 a hidden ancestor while face presence, head direction, head angles and absence
 remain visible. `git diff --check` passed. Real-browser appearance was not tested.
+
+
+## Absence duration and possible absence — 2 November 2026
+
+Implemented absence timing from the first fresh non-detection observation,
+independent of reminder arming. The same observation interval drives the displayed
+counter and possible-absence grace threshold. Stable visible-face baseline remains
+required for reminders. Unknown/stale/unavailable input resets evidence; subsequent
+fresh non-detection starts a new counter interval. Manual Expression stays independent.
+
+- Activated `pomo`: `python -m pytest -q -o faulthandler_timeout=20` passed
+  **115 tests** in 4.77 seconds, with the existing Starlette/HTTPX warning.
+- Tests cover initial non-detection, exact grace boundary, uncertainty reset/restart,
+  counter snapshots, reminder gating and HTTP/WebSocket transport.
+- Ten mocked simulator rendering tests passed, including counter/status alignment
+  and preservation of the selected expression.
+- `git diff --check` passed. No configuration or dependencies were introduced.
+
+Physical webcam validation remains pending. Non-detection is distinct from poor
+lighting, blur, stale input and camera failures; those remain unknown/unavailable
+and do not contribute to the absence counter.

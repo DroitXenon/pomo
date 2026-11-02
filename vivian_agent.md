@@ -225,9 +225,9 @@ Verification records and platform limitations are in
 
 | Check | Recorded result |
 | --- | --- |
-| Full backend suite: `python -m pytest -q` | 112 passed; the existing Starlette/HTTPX deprecation warning remains. |
+| Full backend suite: `python -m pytest -q` | 115 passed; the existing Starlette/HTTPX deprecation warning remains. |
 | Client capture lifecycle tests | 4 passed with mocked browser APIs. |
-| Simulator rendering tests | 9 passed with mocked browser APIs. |
+| Simulator rendering tests | 10 passed with mocked browser APIs. |
 | JavaScript syntax checks | Passed for `simulator/app.js` and `simulator/camera.js`. |
 | Package consistency: `python -m pip check` | No broken requirements. |
 | Environment/model setup | Conda environment setup and model checksum verification passed; CEP-24 setup verified with Conda 26.9.4. |
@@ -277,3 +277,18 @@ Open `http://localhost:8000` in the Windows browser, enable monitoring and grant
 camera permission. Remain visible briefly to establish the baseline; face forward
 to see automatic direction and angle diagnostics. If setup is needed, run
 `sh scripts/setup.sh` first. Stop the backend with Ctrl+C.
+
+
+## Absence counter and possible-absence detection
+
+`backend/behaviour.py` starts the absence interval on the first fresh non-detection,
+even before the visible-face baseline exists. `behaviour.absence_seconds` and the
+`possible_absence` transition use that same interval. Default grace is 1 second;
+reminders still require stable face presence first and 10 seconds of absence.
+Unknown/stale/unavailable input and visible presence reset the interval. The counter
+advances with observations rather than wall-clock waiting. Manual expressions remain
+independent of the detection status.
+
+Policy, HTTP/WebSocket and simulator checks cover initial non-detection, the exact
+grace boundary, counter reset/restart after uncertainty, shared snapshot rendering
+and expression isolation. Physical-camera evaluation remains pending.

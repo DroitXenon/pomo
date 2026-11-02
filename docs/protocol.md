@@ -205,9 +205,14 @@ revision/state unchanged.
 
 Policy status values: `paused`, `unavailable`, `awaiting_face`, `confirming_face`,
 `present`, `tracking_loss`, `possible_absence`, `reminding`, `uncertain`,
-`stale`. Monitoring requires stable face presence before it arms. Continuous
-non-detection first uses the grace period, then possible_absence, then reminding
-at the configured absence threshold. Grace counts within the total duration.
+`stale`. Every fresh `not_detected` observation contributes to a continuous absence
+interval, even before stable face presence arms reminders. `behaviour.absence_seconds`
+starts at zero on the first non-detection and advances with fresh observation times.
+This same interval selects `tracking_loss` before the configured grace period and
+`possible_absence` at/after that boundary. Stable visible presence is required only
+for reminder arming: `reminding` activates at the absence threshold when armed.
+Unarmed non-detection continues counting and remains `possible_absence` past that
+threshold, with `reminder_active=false`. Grace counts within the total duration.
 Any reliable present observation cancels pending absence; stable presence clears
 an active reminder.
 

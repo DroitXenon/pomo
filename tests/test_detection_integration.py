@@ -191,3 +191,28 @@ def test_manual_expression_survives_detections_dismissal_stale_input_and_camera_
             ws.send_json({'type':'camera_failed'})
             failed=ws.receive_json()
             assert failed['camera_status']=='unavailable' and failed['display']==expression
+
+
+def test_initial_no_face_counts_and_triggers_possible_absence_without_baseline():
+    app,now,detection=harness()
+    detection['presence']='not_detected'
+    with TestClient(app) as client:
+        with client.websocket_connect('/ws') as ws:
+            token=start(ws)
+            ws.send_json({'type':'preview_display','display':'ready'})
+            ws.receive_json()
+            for sequence in range(9):
+                now[0]=100+sequence*.25
+                assert upload(client,token,sequence).status_code==200
+                state=ws.receive_json()
+                assert state['behaviour']['absence_seconds']==sequence*.25
+                assert state['behaviour']['status']==('tracking_loss' if sequence==0 else 'possible_absence')
+                assert not state['behaviour']['armed']
+                assert not state['behaviour']['reminder_active']
+                assert state['display']=='ready'
+            detection['presence']='unknown'
+            now[0]+=.25
+            assert upload(client,token,9).status_code==200
+            state=ws.receive_json()
+            assert state['behaviour']['absence_seconds']==0
+            assert state['behaviour']['status']=='uncertain'

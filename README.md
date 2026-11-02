@@ -104,11 +104,17 @@ The observation pipeline and sustained-absence policy are implemented; physical-
 
 ### Presence observations and reminders
 
-Enable monitoring and remain visible for at least 0.5 seconds to establish a face
-baseline. Brief non-detection is tolerated for 1 second. Continued non-detection
-shows `possible_absence`; after 10 continuous seconds it shows a supportive reminder.
-These values are configurable. A stable return clears the reminder. Dismissal
-clears it and resets the absence countdown.
+While monitoring, the absence counter starts with the first fresh `not_detected`
+observation and increases with continuous non-detection, including before a face
+baseline exists. The same interval drives `possible_absence` after the configured
+1-second tracking-loss grace period. Initial non-detection starts at 0 seconds.
+
+A visible face for at least 0.5 seconds establishes the baseline required for
+reminders. Once armed, 10 continuous seconds of non-detection activates a supportive
+reminder. Without that baseline, the counter and possible-absence status still run,
+but no reminder activates. These durations are configurable. Visible presence
+resets the counter; a stable return clears an active reminder. Dismissal clears the
+reminder and starts a new absence interval with the next non-detection observation.
 
 Low light, overexposure, low detail/blur, stale results and camera failures are
 unknown/unavailable input, not absence. They cancel pending absence and require

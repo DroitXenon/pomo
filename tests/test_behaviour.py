@@ -33,7 +33,9 @@ def armed(**kwargs):
 def test_empty_initial_view_never_arms_or_reminds():
     result = policy()
     feed(result, 'not_detected', 0, 20)
-    assert result.status == 'awaiting_face'
+    assert result.status == 'possible_absence'
+    assert result.snapshot()['absence_seconds'] == 20
+    assert not result.armed
     assert not result.reminder_active
 
 
@@ -72,7 +74,7 @@ def test_unknown_cancels_reminder_and_requires_fresh_face_baseline():
     result.observe(observation(2.25, 'unknown', reason='low_light'), 2.25)
     assert result.status == 'uncertain' and not result.reminder_active
     feed(result, 'not_detected', 2.5, 20)
-    assert result.status == 'awaiting_face'
+    assert result.status == 'possible_absence'
     assert not result.reminder_active
 
 
@@ -136,3 +138,25 @@ def test_manual_preview_does_not_create_a_dismissible_reminder():
 def test_invalid_timing_configuration_is_rejected():
     with pytest.raises(ValueError):
         BehaviourConfig(absence_seconds=0.5, tracking_loss_grace_seconds=1)
+
+
+def test_unarmed_absence_counter_and_possible_absence_share_exact_grace_boundary():
+    result = policy(tracking_loss_grace_seconds=1.5)
+    feed(result, 'not_detected', 5, 6.25)
+    assert result.snapshot()['absence_seconds'] == 1.25
+    assert result.status == 'tracking_loss'
+    result.observe(observation(6.5, 'not_detected'), 6.5)
+    assert result.snapshot()['absence_seconds'] == 1.5
+    assert result.status == 'possible_absence'
+    assert not result.reminder_active
+
+
+def test_unknown_resets_counter_but_fresh_non_detection_starts_it_again():
+    result = armed()
+    feed(result, 'not_detected', 1, 3)
+    result.observe(observation(3.25, 'unknown'), 3.25)
+    assert result.snapshot()['absence_seconds'] == 0
+    feed(result, 'not_detected', 3.5, 4.5)
+    assert result.snapshot()['absence_seconds'] == 1
+    assert result.status == 'possible_absence'
+    assert not result.armed and not result.reminder_active
