@@ -50,7 +50,7 @@ def test_head_direction_hysteresis_and_loss():
                                          (128, 'low_detail_or_blur')])
 def test_poor_quality_is_unknown_without_running_inference(level, reason):
     detector = object.__new__(FacePerception)
-    detector.config = PerceptionConfig()
+    detector.config = PerceptionConfig(min_blur_variance=15)
     result = detector.analyse(np.full((48, 64, 3), level, dtype=np.uint8))
     assert result['presence'] == 'unknown' and result['reason'] == reason
 
@@ -84,3 +84,26 @@ def test_automatic_direction_does_not_learn_first_turned_face_as_forward():
     assert head.classify(None) == 'unknown'
     head.reset()
     assert head.classify(HeadPose(yaw=-45, pitch=0, roll=0)) == 'right'
+
+
+
+def test_default_blur_threshold_accepts_moderate_detail_but_rejects_flat_frames():
+    detector = object.__new__(FacePerception)
+    detector.config = PerceptionConfig()
+    detector.timestamp_ms = -1
+    calls = []
+    def detect(image, timestamp):
+        calls.append(timestamp)
+        return SimpleNamespace(face_landmarks=[])
+    detector.model = SimpleNamespace(detect_for_video=detect)
+    gray = np.random.default_rng(8).integers(127,130,(48,64),dtype=np.uint8)
+    rgb = np.repeat(gray[:,:,None],3,axis=2)
+    result = detector.analyse(rgb)
+    assert len(calls) == 1
+    assert 5 <= result['blur_variance'] < 15
+    assert result['presence'] == 'not_detected'
+    assert result['reason'] == 'no_face'
+    rejected = detector.analyse(np.full((48,64,3),128,dtype=np.uint8))
+    assert len(calls) == 1
+    assert rejected['presence'] == 'unknown'
+    assert rejected['reason'] == 'low_detail_or_blur'

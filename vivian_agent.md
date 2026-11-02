@@ -203,7 +203,7 @@ head-angle/blink thresholds in [backend/config.py](backend/config.py).
 | `POMO_ABSENCE_SECONDS` | 10 seconds of continuous non-detection |
 | `POMO_RETURN_SECONDS` | 0.5 seconds of stable presence for baseline/return |
 | `POMO_OBSERVATION_MAX_AGE_SECONDS` | 1 second for evidence age and gaps |
-| Brightness / blur gate | Mean grayscale range 35–230; minimum Laplacian variance 15 |
+| Brightness / blur gate | Mean grayscale range 35–230; minimum Laplacian variance 5 |
 | Head-direction thresholds | Yaw 30°, pitch 25°, exit hysteresis 5° |
 | Iris thresholds | Horizontal midpoint margin 0.15; vertical corner-relative threshold 0.08 eye widths; blink threshold 0.55; maximum head yaw 60° / pitch 45° |
 | Blink full-closure reference | `POMO_PERCEPTION_EYE_BLINK_FULL_CLOSURE=0.60`; continuous normalization to 1.00 |
@@ -225,7 +225,7 @@ Verification records and platform limitations are in
 
 | Check | Recorded result |
 | --- | --- |
-| Full backend suite: `python -m pytest -q` | 115 passed; the existing Starlette/HTTPX deprecation warning remains. |
+| Full backend suite: `python -m pytest -q` | 116 passed; the existing Starlette/HTTPX deprecation warning remains. |
 | Client capture lifecycle tests | 4 passed with mocked browser APIs. |
 | Simulator rendering tests | 10 passed with mocked browser APIs. |
 | JavaScript syntax checks | Passed for `simulator/app.js` and `simulator/camera.js`. |
@@ -247,9 +247,9 @@ they passed when run outside that tool sandbox. No application workaround was ad
   distance, head positions, occlusion and reading notes.
 - Validate physical head/iris-direction signs and coarse eye-position thresholds. It is approximate head
   orientation, not eye gaze or identity recognition.
-- Tune brightness and blur/detail thresholds. A plain background may be treated as
-  low detail and suppress reminders. `POMO_PERCEPTION_MIN_BLUR_VARIANCE=0` disables
-  that gate for evaluation.
+- Tune brightness and blur thresholds on a physical camera. The default minimum
+  blur variance is 5; lower-detail frames are unknown. This starting value needs
+  validation against head movement and genuinely unusable images.
 - Validate browser layout, accessibility, responsive behaviour and actual tab/
   permission lifecycle. Current client tests mock browser APIs.
 - Validate Windows/macOS installation and private HTTPS/WSS forwarding.
@@ -292,3 +292,16 @@ independent of the detection status.
 Policy, HTTP/WebSocket and simulator checks cover initial non-detection, the exact
 grace boundary, counter reset/restart after uncertainty, shared snapshot rendering
 and expression isolation. Physical-camera evaluation remains pending.
+
+
+## Shared blur default
+
+Implemented `POMO_PERCEPTION_MIN_BLUR_VARIANCE=5` in `backend/config.py` and
+`.env.example`. Blur rejection remains active: frames below 5 are unknown, while
+frames meeting the threshold proceed to face inference. Brightness validation also
+remains active. The lower threshold is a prototype starting value requiring webcam
+validation. Existing local environment overrides take precedence; remove them or
+set them to 5 to use the shared value.
+
+`tests/test_perception.py` verifies that moderate detail between 5 and 15 reaches
+face inference, flat frames remain unknown, and explicit blur thresholds still work.

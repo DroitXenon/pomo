@@ -167,9 +167,12 @@ not calibrated probabilities or verified accuracy guarantees. Physical accuracy
 requires evaluation.
 
 Quality thresholds are heuristics and have not been tuned on a physical webcam.
-A plain background can look like a low-detail/blurred image and suppress absence
-reminders. Set `POMO_PERCEPTION_MIN_BLUR_VARIANCE=0` to disable that particular
-check when evaluating such a scene. Face turned away or occluded can appear absent;
+The shared blur threshold is `POMO_PERCEPTION_MIN_BLUR_VARIANCE=5`. Frames below
+that value are unknown; frames with more detail proceed to MediaPipe face inference.
+The check remains active with a lower threshold to tolerate moderate loss of detail.
+This is a prototype starting value, not validated accuracy. Existing `.env` files
+and process settings override this default; remove the override or set it to 5 to
+use the shared threshold. Face turned away or occluded can appear absent;
 the system measures face visibility rather than proving the user left.
 
 ## Runtime and Dependencies
@@ -281,7 +284,7 @@ is processed at a time; old frames are not queued or replayed.
 | `POMO_PERCEPTION_PRESENCE_CONFIDENCE` | 0.5 | MediaPipe face-presence threshold |
 | `POMO_PERCEPTION_TRACKING_CONFIDENCE` | 0.5 | MediaPipe tracking threshold |
 | `POMO_PERCEPTION_MIN_BRIGHTNESS` / `POMO_PERCEPTION_MAX_BRIGHTNESS` | 35 / 230 | Usable grayscale mean range |
-| `POMO_PERCEPTION_MIN_BLUR_VARIANCE` | 15 | Minimum Laplacian variance; 0 disables |
+| `POMO_PERCEPTION_MIN_BLUR_VARIANCE` | 5 | Minimum Laplacian variance; below this is unknown; 0 disables |
 | `POMO_PERCEPTION_YAW_DEGREES` / `POMO_PERCEPTION_PITCH_DEGREES` | 30 / 25 | Direction thresholds relative to the camera |
 | `POMO_PERCEPTION_HYSTERESIS_DEGREES` | 5 | Direction exit margin to reduce flicker |
 

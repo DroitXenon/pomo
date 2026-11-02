@@ -142,3 +142,17 @@ fresh non-detection starts a new counter interval. Manual Expression stays indep
 Physical webcam validation remains pending. Non-detection is distinct from poor
 lighting, blur, stale input and camera failures; those remain unknown/unavailable
 and do not contribute to the absence counter.
+
+
+## Shared blur threshold — 2 November 2026
+
+Implemented a shared minimum blur variance of 5 in application configuration and
+`.env.example`. The gate remains active; below-threshold frames are unknown.
+Existing local environment values override defaults. Brightness checks remain active.
+
+Synthetic checks cover moderately detailed frames with variance between 5 and 15
+reaching inference, flat frames being rejected and explicit blur thresholds.
+Physical head-turning accuracy remains unverified; 5 is a tunable prototype value.
+
+Activated `pomo`: the full backend suite passed **116 tests** in 4.50 seconds,
+with the existing Starlette/HTTPX warning. `git diff --check` passed.
