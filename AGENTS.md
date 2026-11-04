@@ -20,7 +20,7 @@ Pomo is a desktop robot study companion. The software prototype uses a browser s
 - **Phase 3: Test and Validate.** Detection evaluation, deterministic behaviour tests, recovery, usability and installation checks.
 - Pomodoro/session controls and voice recognition are deferred. Implement them when requested as a separate task.
 
-The current baseline provides manual display previews and a monitoring flag. Camera capture, automatic detection, reminder policy and firmware are not yet implemented. Verify this baseline against the code before making status claims, and update the documentation as implementation progresses.
+The current baseline provides manual display previews, browser webcam capture, bounded JPEG ingestion, camera ownership and a long-lived processing worker. Timestamped face observations and a sustained-absence reminder policy are implemented. Head direction and blendshapes are diagnostics only. Detection data does not select manual expressions or drive the robot face. Physical-camera validation and firmware remain pending. Verify this baseline against the code before making status claims, and update the documentation as implementation progresses.
 
 The initial detection target is whether the user leaves the frame. Presence and head direction do not prove attention or distraction. Camera or connection failure must be represented as unavailable/unknown input rather than user absence.
 
@@ -74,7 +74,7 @@ Preserve these contracts unless the requested task changes them. Update the back
 - All clients currently share one in-memory robot state. Use one backend worker while state remains process-local.
 - Each accepted command increments the revision and broadcasts a complete snapshot. New/reconnecting clients receive current state.
 - Current display identifiers are `ready`, `possible_absence`, `reminding` and `unavailable`. Keep identifiers consistent across Python, JavaScript, tests and docs.
-- Monitoring changes currently reset the display to `ready`. Manual expression previews can run while monitoring is paused when development controls are enabled.
+- Monitoring changes reset the display to `ready`; enabling reserves a browser camera session for the sending WebSocket. Manual expression previews can run while monitoring is paused when development controls are enabled.
 - Manual previews are rendering controls, not detection observations or evidence of a triggered reminder.
 - Controls remain disabled until a valid snapshot arrives. Disconnection marks displayed state stale; offline commands are not queued for replay.
 - Keep connection health, camera availability, monitoring state and display state distinct.
@@ -89,11 +89,11 @@ Avoid marketing copy, introductory hero sections, slogans and phase banners. Kee
 
 For Phase 2 changes:
 
-- Make camera sources, duration thresholds and cooldowns configurable; document new settings in `.env.example` and the README.
+- Make camera sources, duration thresholds configurable; document new settings in `.env.example` and the README.
 - Keep frame previews and observation diagnostics in the development interface.
 - Timestamp observations, reject stale input and handle uncertain results, temporary tracking loss and unavailable cameras explicitly.
 - Pause/unavailable input must stop new detection-driven reminders. Resume with fresh observations and release camera resources on shutdown.
-- Keep reminders supportive. Implement dismissal and cooldown as backend behaviour; make optional sound independently muteable.
+- Keep reminders supportive. Implement dismissal as backend behaviour; make optional sound independently muteable.
 - Keep capture/processing local for the laptop prototype unless the task explicitly introduces browser capture or a remote transport.
 - Keep camera images/video out of persistent storage, logs, commits and test fixtures by default. Prefer synthetic observations for automated tests.
 
@@ -102,7 +102,7 @@ For Phase 2 changes:
 Match checks to the change:
 
 - **Backend or protocol:** run the integration suite; add meaningful tests for new behaviour and regressions.
-- **Detection/reminder policy:** use synthetic observations and a controllable clock for thresholds, cooldown, dismissal, pause/resume and unavailable-input cases. Core logic tests must run without a physical camera or fixed timing sleeps.
+- **Detection/reminder policy:** use synthetic observations and a controllable clock for thresholds, dismissal, pause/resume and unavailable-input cases. Core logic tests must run without a physical camera or fixed timing sleeps.
 - **Simulator:** check the changed controls, expressions, connection states and narrow layouts in a browser when available. If Node.js is available, `node --check simulator/app.js` checks JavaScript syntax; Node is not an application runtime requirement.
 - **Scripts:** run `sh -n scripts/setup.sh scripts/dev.sh`; verify setup/startup when those paths change.
 - **Dependencies:** verify environment setup/update, run `pip check` through Conda and run relevant tests.

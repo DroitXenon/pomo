@@ -1,10 +1,15 @@
 from fastapi.testclient import TestClient
-from backend.app import create_app
+from backend.app import create_app as app_factory
+from tests.camera_helpers import DecodeProcessor
+
+
+def create_app(*args):
+    return app_factory(*args, processor_factory=DecodeProcessor)
 
 
 def test_health_and_static():
     with TestClient(create_app()) as c:
-        assert c.get('/health').json() == {'status': 'ok', 'phase': 1}
+        assert c.get('/health').json() == {'status': 'ok', 'phase': 2, 'camera_processor_ready': True}
         assert 'Pomo' in c.get('/').text
         assert c.get('/app.js').status_code == 200
 
@@ -16,7 +21,10 @@ def test_broadcast_reconnect_and_restart():
             b.receive_json()
             a.send_json({'type': 'set_monitoring', 'enabled': True})
             state = a.receive_json()
-            assert state == b.receive_json()
+            peer_state = b.receive_json()
+            assert state['camera_session']
+            assert peer_state['camera_session'] is None
+            assert {**state, 'camera_session': None} == peer_state
             assert state['monitoring_enabled'] is True
             a.send_json({'type': 'preview_display', 'display': 'reminding'})
             assert a.receive_json()['display'] == 'reminding'

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pomo · Simulator</title>
-  <link rel="stylesheet" href="style.css?v=3"><script src="app.js?v=2" defer></script>
+  <link rel="stylesheet" href="style.css?v=8"><script src="camera.js?v=2" defer></script><script src="app.js?v=14" defer></script>
 </head>
 <body>
   <header>
@@ -19,9 +19,34 @@
         <p id="monitor-status" class="small">Monitoring status unknown</p>
       </section>
       <aside class="controls-panel" aria-label="Simulator controls">
+        <section class="camera-panel" aria-label="Camera preview">
+          <h2>Camera</h2>
+          <div class="camera-view">
+            <video id="camera-preview" autoplay muted playsinline aria-label="Live camera preview"></video>
+            <canvas id="face-overlay" width="640" height="480" aria-hidden="true"></canvas>
+          </div>
+          <p id="camera-status" class="small" role="status">Camera paused</p>
+          <p id="detection-status" class="small" role="status">Detection paused</p>
+          <details class="diagnostics">
+            <summary>Detection details</summary>
+            <p id="reminder-message" class="small" role="status" hidden>Your face has not been visible for a while. Ready to return?</p>
+            <button id="dismiss-reminder" hidden disabled>Dismiss reminder</button>
+            <div class="detail-row"><span>Face</span><strong id="face-presence">Unknown</strong></div>
+            <div class="detail-row"><span>Head direction</span><strong id="head-direction">Unknown</strong></div>
+            <div class="detail-row"><span>Head angles</span><strong id="head-angles">—</strong></div>
+            <div class="detail-row"><span>Image quality</span><strong id="image-quality">—</strong></div>
+            <div class="detail-row"><span>Absence</span><strong id="absence-duration">0 s</strong></div>
+            <div hidden>
+              <div class="detail-row"><span>Eye movement</span><strong id="eye-movement">—</strong></div>
+              <div class="detail-row"><span>Iris vertical offsets</span><strong id="eye-vertical-offsets">—</strong></div>
+              <div class="detail-row"><span>Vertical eye signals</span><strong id="eye-vertical-signals">—</strong></div>
+              <div class="detail-row"><span>Mouth movement</span><strong id="mouth-movement">—</strong></div>
+            </div>
+          </details>
+        </section>
         <h2>Expression</h2>
         <div class="previews"><button data-preview="ready" disabled>Ready</button><button data-preview="possible_absence" disabled>Possible absence</button><button data-preview="reminding" disabled>Reminder</button><button data-preview="unavailable" disabled>Unavailable</button></div>
-        <p class="small simulation-note">Manual simulation · No camera input</p>
+        <p class="small simulation-note">Manual expression previews</p>
         <p id="feedback" role="status" class="small"></p>
         <details class="diagnostics">
           <summary>Connection details</summary>
