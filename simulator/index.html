@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pomo · Simulator</title>
-  <link rel="stylesheet" href="style.css?v=3"><script src="app.js?v=2" defer></script>
+  <link rel="stylesheet" href="style.css?v=4"><script src="app.js?v=4" defer></script>
 </head>
 <body>
   <header>
@@ -15,21 +15,65 @@
       <section class="robot-panel" aria-label="Simulated robot">
         <div class="robot" aria-hidden="true"><div class="antenna"></div><div class="screen" id="screen" data-display="ready"><div class="eyes"><i></i><i></i></div><div class="mouth"></div><span class="cheek left"></span><span class="cheek right"></span></div><div class="robot-name">pomo</div></div>
         <h2 id="state-title" aria-live="polite">Connecting…</h2>
-        <button id="monitor" class="primary" disabled>Enable monitoring</button>
+        <p id="preview-status" class="small" hidden></p>
+        <div class="robot-actions">
+          <button id="monitor" class="primary" disabled>Enable monitoring</button>
+          <button id="power" disabled>Power off</button>
+        </div>
         <p id="monitor-status" class="small">Monitoring status unknown</p>
+        <section id="reminder-panel" class="reminder-panel" aria-label="Reminder" aria-live="polite" hidden>
+          <p id="reminder-message"></p>
+          <button id="dismiss" class="primary" disabled>Dismiss reminder</button>
+        </section>
+        <div class="sound-controls">
+          <button id="sound" class="text-button" aria-pressed="true" disabled>Unmute sound</button>
+          <button id="audio-unlock" class="text-button" hidden>Enable audio in this tab</button>
+        </div>
+        <p id="audio-status" class="small">Sound muted</p>
+        <p id="feedback" role="status" class="feedback"></p>
       </section>
       <aside class="controls-panel" aria-label="Simulator controls">
-        <h2>Expression</h2>
-        <div class="previews"><button data-preview="ready" disabled>Ready</button><button data-preview="possible_absence" disabled>Possible absence</button><button data-preview="reminding" disabled>Reminder</button><button data-preview="unavailable" disabled>Unavailable</button></div>
-        <p class="small simulation-note">Manual simulation · No camera input</p>
-        <p id="feedback" role="status" class="small"></p>
+        <h2>Simulated input</h2>
+        <div class="inputs">
+          <button data-observation="present" disabled>Present</button>
+          <button data-observation="absent" disabled>Absent</button>
+          <button data-observation="unknown" disabled>Uncertain</button>
+          <button data-observation="unavailable" disabled>Unavailable</button>
+        </div>
+        <p id="simulation-status" class="small">Enable monitoring, then select an input.</p>
+        <dl class="observations">
+          <div><dt>Observation</dt><dd id="observation-current">—</dd></div>
+          <div><dt>Source</dt><dd id="observation-source">—</dd></div>
+          <div><dt>Camera input</dt><dd id="camera-status">—</dd></div>
+          <div><dt>Absence duration</dt><dd id="absence-duration">—</dd></div>
+          <div><dt>Cooldown left</dt><dd id="cooldown-status">—</dd></div>
+          <div><dt>Observation age</dt><dd id="observation-age">—</dd></div>
+        </dl>
+        <p id="policy-settings" class="small"></p>
+        <p class="small">Simulated observations only. No camera images are captured here.</p>
         <details class="diagnostics">
-          <summary>Connection details</summary>
+          <summary>Expression previews</summary>
+          <p id="previews-status" class="small">Pause monitoring to preview expressions.</p>
+          <div class="previews">
+            <button data-preview="ready" disabled>Ready</button>
+            <button data-preview="shutdown" disabled>Shutdown</button>
+            <button data-preview="distraction" disabled>Distraction</button>
+            <button data-preview="reminding" disabled>Reminder</button>
+            <button data-preview="unavailable" disabled>Unavailable</button>
+            <button id="clear-preview" disabled>Clear preview</button>
+          </div>
+        </details>
+        <details class="diagnostics">
+          <summary>Debug logs</summary>
+          <div class="detail-row"><span>Actual state</span><strong id="behavior-state">—</strong></div>
           <div class="detail-row"><span>State revision</span><strong id="revision">—</strong></div>
-          <div class="log-heading"><h3>Connection journal</h3><button id="clear" class="text-button">Clear</button></div>
-          <ol id="journal" aria-label="Recent connection events"></ol>
+          <div class="log-heading"><h3>Backend events</h3><button id="clear" class="text-button">Clear view</button></div>
+          <ol id="events" class="journal" aria-label="Backend events"></ol>
+          <h3 class="log-title">Connection journal</h3>
+          <ol id="journal" class="journal" aria-label="Recent connection events"></ol>
         </details>
       </aside>
     </div>
   </main>
-</body></html>
+</body>
+</html>

@@ -50,7 +50,7 @@ main { max-width: 1000px; margin: auto; padding: 28px 24px; }
 .left { left: 25px; }
 .right { right: 25px; }
 .robot-name { font-size: 12px; font-weight: 700; letter-spacing: 2px; color: #595959; padding: 12px; }
-.screen[data-display="possible_absence"] .mouth { transform: rotate(180deg); }
+.screen[data-display="distraction"] .mouth { transform: rotate(180deg); }
 .screen[data-display="reminding"] .eyes i { height: 29px; }
 .screen[data-display="reminding"] .mouth { border: 3px solid #f5f5f5; width: 13px; border-radius: 50%; }
 .screen[data-display="unavailable"] .eyes i { height: 4px; margin-top: 13px; }
@@ -67,10 +67,10 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .dot-label::before { content: "●"; color: #737373; margin-right: 7px; }
 .dot-label[data-connected="true"]::before { color: #f5f5f5; }
 .controls-panel h2 { margin: 0 0 16px; font-size: 14px; font-weight: 600; }
-.previews { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.previews button { font-size: 12px; text-align: left; }
-.previews button:not(:disabled):hover { background: #282828; border-color: #737373; }
-.previews button[aria-pressed="true"] { background: #303030; border-color: #d4d4d4; }
+.previews, .inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.previews button, .inputs button { font-size: 12px; text-align: left; }
+.previews button:not(:disabled):hover, .inputs button:not(:disabled):hover { background: #282828; border-color: #737373; }
+.previews button[aria-pressed="true"], .inputs button[aria-pressed="true"] { background: #303030; border-color: #d4d4d4; }
 .simulation-note { margin: 16px 0 0; }
 #feedback { margin: 12px 0 0; }
 #feedback:empty { display: none; }
@@ -82,7 +82,31 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .log-heading { display: flex; align-items: center; justify-content: space-between; }
 .log-heading h3 { font-size: 12px; font-weight: 500; margin: 20px 0 12px; }
 .text-button { border: 0; padding: 6px; font-size: 12px; color: #a3a3a3; background: transparent; }
-#journal { height: 104px; overflow: auto; overflow-wrap: anywhere; background: #0c0c0c; border-radius: 8px; padding: 12px; list-style: none; margin: 0; font: 11px/1.9 ui-monospace, monospace; color: #a3a3a3; }
+.journal { height: 132px; overflow: auto; overflow-wrap: anywhere; background: #0c0c0c; border-radius: 8px; padding: 12px; list-style: none; margin: 0; font: 11px/1.9 ui-monospace, monospace; color: #a3a3a3; }
+
+[hidden] { display: none !important; }
+.robot-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.robot-actions > button { min-height: 44px; }
+.screen[data-display="shutdown"] .eyes,
+.screen[data-display="shutdown"] .mouth,
+.screen[data-display="shutdown"] .cheek { visibility: hidden; }
+.screen[data-display="shutdown"]::after { content: ""; position: absolute; width: 24px; height: 3px; background: #737373; top: 64px; left: calc(50% - 12px); }
+#preview-status { margin: -8px 0 18px; }
+.reminder-panel { margin-top: 22px; padding: 18px 14px; border: 1px solid #d4d4d4; border-radius: 10px; background: #202020; }
+.reminder-panel p { font-size: 14px; line-height: 1.6; margin: 0 0 14px; }
+.reminder-panel .primary { font-size: 12px; padding: 11px 18px; }
+.sound-controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 18px; }
+#audio-status { margin: 4px 0 0; }
+.feedback { font-size: 12px; line-height: 1.6; padding: 10px; border: 1px solid #737373; border-radius: 8px; margin: 18px 0 0; overflow-wrap: anywhere; }
+.feedback:empty { display: none; }
+.observations { margin: 20px 0 0; font-size: 12px; }
+.observations > div { display: flex; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid #303030; }
+.observations dt { color: #a3a3a3; }
+.observations dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; }
+.log-title { margin: 18px 0 10px; font-size: 12px; font-weight: 500; }
+.primary:not(:disabled):hover { background: #d4d4d4; }
+.text-button:not(:disabled):hover { color: #ffffff; text-decoration: underline; }
+#policy-settings { font-variant-numeric: tabular-nums; }
 
 @media (max-width: 700px) {
   header { padding: 16px; gap: 12px; }

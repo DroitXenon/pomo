@@ -12,7 +12,7 @@ The current foundation includes:
 
 - A `pomo` Conda environment, repeatable setup and configurable startup.
 - FastAPI HTTP routes and a WebSocket transport with strict command validation.
-- A monochrome simulator with a placeholder robot face, monitoring control and four manual expression previews.
+- A monochrome simulator with a placeholder robot face, monitoring control and five manual expression previews.
 - Shared state broadcasts, connection status, automatic reconnection and a bounded connection journal.
 - Integration tests covering routes, commands, broadcasts and state recovery.
 
@@ -20,51 +20,44 @@ The prototype scope is camera detection, robot display and reminders. Pomodoro t
 
 ### Phase 2: Add Basic Functions
 
-Introduce a configurable webcam source and camera availability reporting. The first detection target is whether the user leaves the frame. Presence observations indicate possible absence; they do not establish concentration or distraction.
+Implemented on `agent/feature/states`: the five-state backend policy, sustained-absence reminders, global monitoring and soft power controls, dismissal, configurable cooldown, optional sound/mute and bounded debug logging. Simulated observations drive the complete pipeline without a camera. Camera capture and perception remain a separate integration task.
 
-Connect observations to a backend state machine with configurable duration thresholds, reminder dismissal, cooldowns and monitoring pause/resume. Keep connection health independent of detection state. Provide distinct display states, simulated observation inputs, diagnostic logs and an optional sound cue with mute control.
+The first detection target is whether the user leaves the frame. Presence observations do not establish concentration or distraction. Unknown tracking, missing input and disconnected sources lead to detection-unavailable behaviour.
 
-Completion requires the camera or simulated observations to drive backend decisions and simulator expressions, including recovery from unavailable or stale input. Raw camera images and video should not be stored by default.
+Implementation follows the [Reminders](https://app.notion.com/p/40a66acb0c0380f5bacfc18ac6fa598a), [States Implementation](https://app.notion.com/p/40a66acb0c0380deaf4fd7dbefb28b04) and [Debug Logs](https://app.notion.com/p/40a66acb0c0380078ca4ef9dcfaed7e9) specifications. Defaults are configurable; no camera images or video are captured or stored by this implementation.
 
 ### Phase 3: Test and Validate
 
-Validate camera lifecycle and permissions, detection under different lighting and user positions, state transitions, reminder timing and interruption recovery. Add deterministic tests for thresholds, cooldowns, dismissal and pause/resume using simulated observations.
+Automated checks cover policy transitions, timing boundaries, dismissal, cooldown, pause/resume, observation freshness, source disconnect/reconnect, strict message validation, configuration and simulator behaviour. Policy timing uses injected clocks rather than test sleeps or camera hardware.
 
-Run a reproducible end-to-end demonstration, conduct a small teammate usability check, verify installation on another machine and document false reminders, missed events and known limitations. Record the next steps for physical robot integration and review working changes before merging into `main`.
+Remaining validation includes real camera lifecycle/permissions, lighting and position evaluation, usability with teammates, installation on other platforms and physical integration. Record false reminders, missed events and known limitations before making detection-quality claims.
 
 ## Architecture
 
 ### Current data flow
 
 ```text
-Browser simulator
-  │ JSON commands over /ws
+Browser controls / simulated observations / future camera producer
+  │ strict JSON commands and timestamped metadata over /ws
   ▼
-FastAPI command validation
+FastAPI transport → camera-independent ReminderEngine
+  │ monotonic timing, lifecycle tokens, reminder policy
+  │ 250 ms timer for expiry, thresholds and live diagnostics
   ▼
-Shared in-memory state + revision counter
-  │ complete state snapshots
-  ▼
-All connected simulator clients
+Complete shared state snapshots → all connected simulators
 ```
 
-One Uvicorn process serves the static interface, health endpoint and WebSocket route on the same host and port. The simulator derives its WebSocket URL from the page origin and uses `wss` when served over HTTPS.
+`backend/policy.py` owns behaviour independently of camera devices and rendering. `backend/app.py` serialises policy operations and broadcasts with an `asyncio.Lock`. `backend/config.py` validates environment settings; `backend/__main__.py` starts Uvicorn.
 
-State changes and broadcasts are serialised with an `asyncio.Lock`. Each accepted command increments the revision counter. Broadcast sends have a two-second timeout per client; failed clients are removed from the active set.
+One process serves static assets, health and WebSocket traffic. Accepted commands and published timer changes advance a revision counter. Failed sends time out after two seconds per client. If the last accepted observation producer disconnects, its input and active reminder are invalidated; a viewer disconnect does not clear another source.
 
-All clients control the same robot state. State is process-local and resets on restart, so run a single backend worker. Persistence, separate user sessions and cross-process state synchronisation are not implemented.
+All clients control one in-memory robot. Restart resets state, history and counters and creates a new instance ID. Use one backend worker. Persistence, separate user sessions and cross-process state synchronisation are not implemented.
 
-### Planned detection flow
+### Camera integration boundary
 
-```text
-Configurable camera source or simulated observations
-  → presence detection and timestamped observations
-  → backend behaviour policy: duration, cooldown, dismissal
-  → display state
-  → browser simulator / future physical robot adapter
-```
+A future camera processor sends presence metadata, its Unix observation timestamp and the current observation-session token through the documented `submit_observation` command. The backend rejects stale, out-of-order and old-session input. It decides when to transition or remind, and the simulator renders the resulting state.
 
-The observation pipeline and behaviour policy belong to Phase 2. The `firmware/` directory currently contains integration notes; it does not contain a working hardware adapter.
+Physical capture/perception and the `firmware/` adapter remain unimplemented. The browser simulator provides synthetic observation heartbeats to exercise the policy now. See [protocol v2](docs/protocol.md) for the producer contract.
 
 ## Runtime and Dependencies
 
@@ -116,94 +109,102 @@ The Conda setup has been verified on macOS ARM64. Windows and Linux installation
 
 ## Configuration
 
-The backend reads `.env` from the repository root. Existing process environment variables take precedence.
+The backend reads `.env` from the repository root. Process environment variables take precedence. Changes to startup settings require a backend restart; monitoring, power and mute controls are shared live.
 
 | Variable | Default | Behaviour |
 | --- | --- | --- |
 | `POMO_HOST` | `127.0.0.1` | Uvicorn bind address |
 | `POMO_PORT` | `8000` | Shared HTTP/WebSocket port; accepts 1–65535 |
-| `POMO_DEV_CONTROLS` | `true` | Allows manual expression commands; accepts `true` or `false`, case-insensitively |
+| `POMO_DEV_CONTROLS` | `true` | Allows simulated observations and expression previews |
+| `POMO_ABSENCE_SECONDS` | `5` | Continuous fresh absence needed before a reminder; finite and greater than zero |
+| `POMO_REMINDER_COOLDOWN_SECONDS` | `30` | Quiet period after triggering or dismissing; finite and non-negative |
+| `POMO_OBSERVATION_TIMEOUT_SECONDS` | `3` | Maximum observation age; finite and greater than zero |
+| `POMO_SOUND_ENABLED` | `false` | Initial shared sound preference; each browser still needs a user gesture for audio |
 
-Example shell override:
+Boolean settings accept `true` or `false`, case-insensitively. Invalid settings fail at startup. A zero cooldown intentionally permits immediate retriggering after dismissal when continuing absence still qualifies.
+
+Example shell override for a short development demonstration:
 
 ```sh
-POMO_PORT=8001 POMO_DEV_CONTROLS=false sh scripts/dev.sh
+POMO_PORT=8001 POMO_ABSENCE_SECONDS=2 POMO_REMINDER_COOLDOWN_SECONDS=5 sh scripts/dev.sh
 ```
 
-Disabling development controls rejects expression-preview commands. Monitoring remains a stored simulation flag; enabling it does not start a camera or trigger automatic reminders.
+The browser's simulated input repeats at an interval below the configured freshness timeout. Real producers must also send continuing fresh observations. One absence packet cannot sustain a reminder indefinitely.
+
+## States and Reminders
+
+| Actual state | Meaning |
+| --- | --- |
+| `ready` | Powered on with monitoring paused, or fresh presence restored |
+| `shutdown` | Soft power off; monitoring, input, preview, active reminder and cooldown cleared |
+| `distraction` | Fresh absence under evaluation or ongoing absence during cooldown |
+| `reminding` | A real visual reminder is active |
+| `unavailable` | Monitoring is enabled but input is missing, expired, unavailable or uncertain |
+
+Power off is a reversible policy state, not a server shutdown. Wake returns to ready with monitoring paused. Monitoring changes discard old observations and require fresh input. Pausing, returning presence, unknown input and unavailable input clear active reminders and pending absence duration; remaining cooldown is retained. Power cycling clears cooldown.
+
+An absence must remain continuously supported by fresh observations for the configured threshold. A triggered reminder stays active until dismissed, presence returns, input becomes uncertain/unavailable, monitoring pauses or power turns off. An active reminder never repeatedly retriggers when its original cooldown expires.
+
+Dismissal starts a full new quiet period. If absence continues, a new reminder can appear only after that cooldown. Every real reminder has an increasing ID scoped to the backend instance, so stale dismissals and repeated snapshots cannot replay a previous cue.
+
+Sound is optional and initially muted. Unmute/enable audio through a user gesture in each tab. A newly received real reminder can play one short cue; initial/reconnect snapshots, preview expressions and repeated snapshots do not replay it. Browser audio restrictions or unsupported audio do not prevent visual reminders.
 
 ## HTTP and WebSocket Interface
 
 | Endpoint | Transport | Contract |
 | --- | --- | --- |
-| `/` | HTTP GET | Simulator HTML; static assets are served from the same origin |
-| `/health` | HTTP GET | `{"status":"ok","phase":1}` |
-| `/ws` | WebSocket | JSON text commands, state snapshots and validation errors |
+| `/` | HTTP GET | Simulator and same-origin static assets |
+| `/health` | HTTP GET | `{"status":"ok","phase":2,"protocol_version":2}` |
+| `/ws` | WebSocket | Strict JSON commands, complete state snapshots and validation errors |
 
-### State snapshot
+Protocol version 2 replaces v1's `possible_absence` display identifier with `distraction`. Update backend and simulator together.
 
-A client receives the current snapshot on connection. Every accepted command broadcasts a new snapshot to all connected clients.
-
-```json
-{
-  "type": "state",
-  "protocol_version": 1,
-  "monitoring_enabled": false,
-  "display": "ready",
-  "camera_status": "not_implemented",
-  "revision": 0,
-  "dev_controls": true
-}
-```
-
-Display values are `ready`, `possible_absence`, `reminding` and `unavailable`. These are currently manual display previews. A `reminding` display does not imply that reminder logic has run, and an `unavailable` display is separate from WebSocket connection status.
-
-### Commands
+Commands cover `set_monitoring`, `set_power`, `set_muted`, `dismiss_reminder`, `submit_observation`, `preview_display` and `clear_preview`. For example:
 
 ```json
 {"type":"set_monitoring","enabled":true}
-{"type":"set_monitoring","enabled":false}
-{"type":"preview_display","display":"possible_absence"}
+{"type":"set_muted","muted":false}
+{"type":"dismiss_reminder","reminder_id":1}
 ```
 
-`set_monitoring` requires a strict boolean and resets the display to `ready` for both enable and pause commands. Manual previews are allowed while monitoring is paused when development controls are enabled.
+Each snapshot includes actual `behavior_state`, rendered `display`, power/monitoring/mute state, camera/input metadata, observation-session token, absence duration, cooldown, active reminder, settings and up to 100 backend events. Manual previews require power on and monitoring paused; they change rendering only and never create reminders or sounds.
 
-Unknown commands, extra fields, invalid JSON and binary messages produce an error without changing state:
+Observation producers copy the latest session token, send strictly increasing finite Unix timestamps and discard buffered packets on lifecycle changes or disconnect. A source timeout invalidates the session. Unknown/binary/malformed messages and extra or incorrectly typed fields are rejected without applying a policy operation. Incoming message size is limited to 4,096 bytes. Full schemas, examples and recovery rules are in [protocol v2](docs/protocol.md).
 
-```json
-{"type":"error","code":"invalid_command","message":"Explanation"}
-```
-
-The startup configuration limits WebSocket message size to 4,096 bytes. The application also validates incoming command shape and text length. Oversized messages may close the connection.
-
-### Reconnection and reset semantics
-
-The simulator retries connections after 1, 2, 4 and 8 seconds, then at most every 10 seconds. Receiving a valid snapshot resets the retry delay. Controls stay disabled until a snapshot arrives, and disconnection marks the displayed state as potentially stale.
-
-Reconnecting clients receive the current state. Backend restart resets monitoring to paused, display to `ready` and revision to zero. Offline commands are not queued or replayed.
-
-See [protocol v1](docs/protocol.md) for the transport contract.
+The simulator retries connections with capped exponential backoff and disables controls until a valid snapshot arrives. Disconnect stops simulated heartbeats and local audio. Reconnection restores current shared state but requires a fresh simulated-input selection; offline commands and old sounds are not replayed.
 
 ## Verification
 
-Run the integration suite and check installed package consistency:
+Run the Python checks and package-consistency validation:
 
 ```sh
 conda run --name pomo python -m pytest -q
 conda run --name pomo python -m pip check
 ```
 
-The current four tests cover static/health routes, multi-client broadcasts, reconnect/restart state, malformed commands and disabled previews. They do not validate camera detection, reminder timing or physical hardware.
+Optional UI behaviour checks use Node.js's built-in test runner, with no npm dependencies:
 
-Recorded checks include fresh and repeated Conda setup, four passing integration tests, dependency consistency and live HTTP/WebSocket communication on macOS ARM64. The current test adapter emits a Starlette/HTTPX deprecation warning. See [verification records](docs/verification.md) for dates and limitations.
+```sh
+node --test tests/test_simulator.js
+node --check simulator/app.js
+```
 
-Manual simulator check:
+Node is needed only for these JavaScript checks, not to run Pomo. The Python suites cover pure policy, WebSocket integration and configuration. The JavaScript suite checks simulated heartbeat lifecycle, control gating, sound deduplication/audio fallback, error handling and safe log rendering.
 
-1. Open the interface and confirm `Connected`.
-2. Enable monitoring and confirm the simulation-only status.
-3. Select each expression and verify its label and face.
-4. Open another tab and verify both clients receive the same state.
-5. Stop and restart the backend; verify controls disable, reconnect and restore the restart defaults.
+The existing Starlette/HTTPX test-adapter deprecation warning remains. See [verification records](docs/verification.md) for dated results and material limits.
+
+Manual simulator demonstration:
+
+1. Start the backend, open the simulator and confirm Connected.
+2. Enable monitoring. Without input, the actual state is Detection unavailable.
+3. Select Absent under simulated input. Continuing fresh observations first show Distraction, then a visual reminder after the threshold.
+4. Dismiss it and watch the cooldown. Select Present to clear pending absence; select Uncertain or Unavailable to stop detection-driven reminders.
+5. Enable sound through the button to allow local audio for new reminders; mute stops an in-flight cue.
+6. Pause monitoring, then preview all five expressions. Previews do not trigger real reminders or sound.
+7. Power off and wake Pomo. Verify wake leaves monitoring paused.
+8. Open a second tab and check shared state. Reconnect a viewer without replaying sound; disconnect the observation-producing tab and check unavailable state.
+
+The debug panel shows current observation/source/age, absence duration, cooldown, actual state and backend events. Clearing the browser log clears that tab's view only; it does not erase shared backend history.
 
 ## Deployment Constraints
 
@@ -217,13 +218,15 @@ Forward the configured port privately through the workspace provider. The proxy 
 
 The development server has no authentication, and every connected client can control the shared robot. Keep access restricted through the workspace's access controls.
 
-A remote backend cannot directly open a laptop webcam. Phase 2 must either run capture and processing locally or explicitly implement browser capture and transport.
+A remote backend cannot directly open a laptop webcam. A real camera adapter must either run capture and processing locally or explicitly implement browser capture and transport.
 
 ## Repository Structure
 
 ```text
 backend/
-  app.py              FastAPI factory, command validation and shared state
+  app.py              FastAPI transport, strict commands, timer and broadcasts
+  policy.py           Camera-independent state/reminder policy and bounded events
+  config.py           Validated environment configuration
   __main__.py         Configuration loading and Uvicorn entry point
 simulator/
   index.html          Robot display and simulator controls
@@ -240,6 +243,9 @@ scripts/
   dev.sh              Start the backend inside that environment
 tests/
   test_backend.py     HTTP/WebSocket integration tests
+  test_policy.py      Fake-clock state/reminder policy tests
+  test_config.py      Environment validation tests
+  test_simulator.js   Optional dependency-free Node UI behaviour checks
 environment.yml       Conda runtime and pinned Python packages
 .env.example          Configuration defaults
 ```
@@ -256,21 +262,24 @@ Discussion updates are shared through commits and pull requests. Teammates must 
 
 - [ ] Add configurable webcam capture with start/stop lifecycle, development preview and availability/error reporting.
 - [ ] Select and document the detection libraries; implement presence/absence observations for the initial prototype.
-- [ ] Add timestamps and observation freshness checks; handle poor lighting, uncertain results and temporary tracking loss.
-- [ ] Define backend state transitions and configurable sustained-absence thresholds.
-- [ ] Connect observations to backend decisions and broadcast the resulting display state.
-- [ ] Implement reminder dismissal, cooldown, pause/resume and recovery when the user returns.
-- [ ] Add an optional sound cue with mute control.
-- [ ] Add simulated observation events and diagnostics for observation duration, cooldown, reminders and errors.
-- [ ] Stop reminders on unavailable input and discard stale observations after interruptions; keep camera recording disabled by default.
+- [x] Add timestamp/session freshness validation and explicitly handle unknown, unavailable and expired observation metadata.
+- [ ] Evaluate the real detector under poor lighting and temporary tracking loss.
+- [x] Define the five backend states and configurable sustained-absence thresholds.
+- [x] Connect simulated/producer observation metadata to backend decisions and broadcast the resulting state.
+- [ ] Integrate the physical webcam/perception producer with that contract.
+- [x] Implement reminder dismissal, cooldown, global pause/resume, soft power and presence recovery.
+- [x] Add an optional sound cue with mute/audio-unlock controls and reconnect deduplication.
+- [x] Add simulated observation heartbeats, live duration/cooldown diagnostics and bounded reminder/error logs.
+- [x] Clear reminders on unavailable input and discard stale/old-session observations after interruptions; no camera recording is added.
 
 ### Phase 3: Test and Validate
 
 - [ ] Test missing/busy cameras, denied permission, resource release and recovery after interruption.
 - [ ] Evaluate leaving the frame, looking away and reading notes across lighting conditions, distances and head positions; record false reminders and missed events.
-- [ ] Add camera-independent tests for thresholds, cooldown, dismissal, pause/resume and unavailable input.
+- [x] Add camera-independent tests for thresholds, cooldown, dismissal, pause/resume, power, freshness and unavailable input.
 - [ ] Validate backend, simulator and camera restart/disconnection sequences without replaying old reminders.
-- [ ] Demonstrate enable monitoring → observations → sustained absence → reminder → dismissal → recovery, using both camera and simulated input.
+- [ ] Complete the manual browser/audible check and a real-camera demonstration of monitoring → observations → absence → reminder → dismissal → recovery.
+- [x] Add automated coverage of the simulated observation and reminder pipeline.
 - [ ] Have teammates test installation and usability; record whether controls and reminder frequency are understandable and acceptable.
 - [ ] Validate Windows/Linux setup and private HTTPS/WSS forwarding where those environments are used.
 - [ ] Record a short demo, configuration instructions, detection limitations and validation results; review and merge working changes into `main`.

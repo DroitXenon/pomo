@@ -21,7 +21,7 @@ Pomo is a desktop robot study companion. The software prototype uses a browser s
 - **Phase 3: Test and Validate.** Detection evaluation, deterministic behaviour tests, recovery, usability and installation checks.
 - Pomodoro/session controls and voice recognition are deferred. Implement them when requested as a separate task.
 
-The current baseline provides manual display previews and a monitoring flag. Camera capture, automatic detection, reminder policy and firmware are not yet implemented. Verify this baseline against the code before making status claims, and update the documentation as implementation progresses.
+The current baseline includes a five-state reminder policy, timestamped observation ingestion, simulated observations, dismissal/cooldown, global monitoring/power/mute and bounded debug logs. Camera capture/perception and physical firmware remain unimplemented. Verify this baseline against the code before making status claims, and update the documentation as implementation progresses.
 
 The initial detection target is whether the user leaves the frame. Presence and head direction do not prove attention or distraction. Camera or connection failure must be represented as unavailable/unknown input rather than user absence.
 
@@ -53,7 +53,9 @@ Defaults are `POMO_HOST=127.0.0.1`, `POMO_PORT=8000` and `POMO_DEV_CONTROLS=true
 
 | Location | Responsibility |
 | --- | --- |
-| `backend/app.py` | FastAPI factory, command schema, shared state and WebSocket transport |
+| `backend/app.py` | FastAPI factory, strict commands, observation ownership, timer and broadcasts |
+| `backend/policy.py` | Camera-independent state/reminder policy, freshness and bounded events |
+| `backend/config.py` | Validated environment configuration |
 | `backend/__main__.py` | Configuration loading and server startup |
 | `simulator/` | HTML/CSS/JavaScript display, controls and connection handling |
 | `firmware/` | Physical integration notes; future hardware adapter |
@@ -74,8 +76,8 @@ Preserve these contracts unless the requested task changes them. Update the back
 - Commands are strictly validated. Invalid input must not mutate state or crash the server.
 - All clients currently share one in-memory robot state. Use one backend worker while state remains process-local.
 - Each accepted command increments the revision and broadcasts a complete snapshot. New/reconnecting clients receive current state.
-- Current display identifiers are `ready`, `possible_absence`, `reminding` and `unavailable`. Keep identifiers consistent across Python, JavaScript, tests and docs.
-- Monitoring changes currently reset the display to `ready`. Manual expression previews can run while monitoring is paused when development controls are enabled.
+- Protocol 2 display identifiers are `ready`, `shutdown`, `distraction`, `reminding` and `unavailable`. Keep identifiers consistent across Python, JavaScript, tests and docs; v1 `possible_absence` is replaced by `distraction`.
+- Monitoring changes discard observations and active reminders and rotate the session token. Pausing shows `ready`; enabling without fresh input shows `unavailable`. Manual previews require power on, monitoring paused and development controls enabled.
 - Manual previews are rendering controls, not detection observations or evidence of a triggered reminder.
 - Controls remain disabled until a valid snapshot arrives. Disconnection marks displayed state stale; offline commands are not queued for replay.
 - Keep connection health, camera availability, monitoring state and display state distinct.
@@ -104,7 +106,7 @@ Match checks to the change:
 
 - **Backend or protocol:** run the integration suite; add meaningful tests for new behaviour and regressions.
 - **Detection/reminder policy:** use synthetic observations and a controllable clock for thresholds, cooldown, dismissal, pause/resume and unavailable-input cases. Core logic tests must run without a physical camera or fixed timing sleeps.
-- **Simulator:** check the changed controls, expressions, connection states and narrow layouts in a browser when available. If Node.js is available, `node --check simulator/app.js` checks JavaScript syntax; Node is not an application runtime requirement.
+- **Simulator:** check changed controls, expressions, connection states and narrow layouts in a browser when available. If Node.js is available, run `node --test tests/test_simulator.js` and `node --check simulator/app.js`; Node is not an application runtime requirement.
 - **Scripts:** run `sh -n scripts/setup.sh scripts/dev.sh`; verify setup/startup when those paths change.
 - **Dependencies:** verify environment setup/update, run `pip check` through Conda and run relevant tests.
 - **Documentation only:** check accuracy, local links, commands and `git diff --check`; application tests are not required for prose-only edits.

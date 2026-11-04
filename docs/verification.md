@@ -38,3 +38,41 @@ Verified on macOS ARM64 with Conda 25.1.1 and Python 3.13.18:
   acknowledged, and Ctrl+C shut down the backend.
 
 Conda setup on Windows and Linux has not been verified.
+
+## States, reminders and debug logs — 31 October 2026
+
+Implemented on `agent/feature/states` against the Reminders, States Implementation
+and Debug Logs task specifications linked in [protocol v2](protocol.md#task-sources).
+Verified on macOS ARM64 with the existing Python 3.13.18 Conda environment and
+Node.js 26.11.1. No dependency additions were required.
+
+- `conda run --name pomo python -m pytest -q`: 137 passed (41 pure-policy,
+  50 HTTP/WebSocket integration and 46 configuration cases). Timing tests use
+  injected monotonic/epoch clocks without camera hardware or timing sleeps.
+- `conda run --name pomo python -m pip check`: no broken requirements.
+- `node --test tests/test_simulator.js`: seven passed. These execute the actual
+  simulator JavaScript using mocked DOM, WebSocket, timers and audio objects;
+  they do not verify rendered layout or audible output in a browser.
+- `node --check simulator/app.js`, shell-script syntax checks and
+  `git diff --check` passed.
+- A real server started through `scripts/dev.sh` on a temporary localhost port.
+  `/`, `/health` and both static assets returned 200. A live observation producer
+  and viewer exercised threshold-driven reminders, restoration of an active
+  reminder on reconnect, no repeated active cue, dismissal with a full quiet
+  period, subsequent reminders, producer-disconnect invalidation, presence and
+  uncertain/unavailable input, global pause, soft shutdown/wake and mute.
+  Shortened smoke-check settings were 0.5 s absence, 1 s cooldown and 0.8 s input
+  timeout; committed defaults remain 5 s, 30 s and 3 s respectively.
+- Ctrl+C completed backend shutdown. Both temporary verification servers were
+  stopped afterwards.
+
+Remaining limits:
+
+- Browser access reported an unavailable host; native Arc/Chrome access failed
+  with `cgWindowNotFound`. Desktop/narrow rendered layout, browser interaction
+  and the physical audibility of the sound cue remain unverified for this change.
+- Real camera capture/perception and physical firmware are not implemented.
+  Metadata ingestion is ready for a separate camera adapter; no images/video
+  were captured or stored during these checks.
+- Windows, Linux, cloud proxy forwarding and teammate usability remain untested.
+- The existing Starlette/HTTPX test-adapter deprecation warning remains.

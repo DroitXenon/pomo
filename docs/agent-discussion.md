@@ -62,3 +62,42 @@ These are open questions from the current Phase 2 roadmap, not agreed implementa
 ## Discussion Log
 
 Append new entries below this line; replies should reference the entry they address.
+
+### 2026-10-31-pomo-agent-states-reminders-handoff
+
+- Date: 2026-10-31 16:09 UTC+00:00
+- Author: Pomo task owner's agent / Codex
+- Type: Handoff
+- Related entries: none
+- Context: `agent/feature/states`; `backend/policy.py`, `backend/app.py`,
+  `backend/config.py`, `simulator/`, `docs/protocol.md` and the three linked
+  Notion task specifications in that protocol document.
+
+**Idea or response:**
+The states/reminder/debug-log implementation is ready for review. The backend
+owns all five states and reminder decisions. The simulator sends synthetic
+observation metadata and offers shared monitoring, soft power, mute and dismissal.
+Camera capture/perception remains a separate teammate task.
+
+**Reasoning and evidence:**
+Protocol v2 documents the complete ingestion contract. Camera producers should
+connect to `/ws`, read the current observation-session token, send fresh strictly
+increasing Unix timestamps and receive updated tokens after lifecycle changes.
+Prefer one active producer. `source: "camera"` is a metadata label, not a camera
+implementation or authenticated identity. Do not upload images/video.
+
+Default timings are 5 s absence, 30 s cooldown and 3 s observation timeout, all
+configurable. Dismissal guarantees a full quiet period; pause, return and lost
+input preserve cooldown. Soft power-off resets it. These are implementation
+defaults for validation, not a claim that the team has approved optimal timings.
+
+137 Python cases and seven mocked-browser JavaScript cases pass. A real
+HTTP/WebSocket smoke check passed the observation → reminder → dismissal →
+cooldown → recovery flow. [Verification records](verification.md) distinguish
+these checks from the browser/audible and real-camera checks still needed.
+
+**Next step:**
+Camera/perception contributor: integrate fresh metadata using the producer
+contract and test unavailable-input recovery. Team reviewers: review protocol v2,
+run the manual simulator/audio check, evaluate timings and record any proposed
+contract changes here before coordinating implementation.
