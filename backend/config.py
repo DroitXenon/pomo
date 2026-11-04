@@ -1,13 +1,20 @@
 """Validated camera, perception and behaviour settings loaded by __main__."""
+from dataclasses import dataclass
 import os
 from pathlib import Path
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from backend.policy import PolicyConfig
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class CameraConfig(BaseModel):
+class FiniteConfig(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
+
+class CameraConfig(FiniteConfig):
     width: int = Field(default=640, ge=64, le=1920)
     height: int = Field(default=480, ge=64, le=1080)
     fps: int = Field(default=10, ge=1, le=30)
@@ -18,19 +25,20 @@ class CameraConfig(BaseModel):
     model_path: Path = ROOT / 'models/face_landmarker.task'
 
     @classmethod
-    def from_env(cls):
-        return settings_from_env(cls, 'POMO_CAMERA_')
+    def from_env(cls, environ=None):
+        return settings_from_env(cls, 'POMO_CAMERA_', environ)
 
     def browser_settings(self):
         return self.model_dump(exclude={'model_path'})
 
 
-def settings_from_env(cls, prefix):
-    return cls(**{name: os.environ[f'{prefix}{name.upper()}']
-                  for name in cls.model_fields if f'{prefix}{name.upper()}' in os.environ})
+def settings_from_env(cls, prefix, environ=None):
+    environ = os.environ if environ is None else environ
+    return cls(**{name: environ[f'{prefix}{name.upper()}']
+                  for name in cls.model_fields if f'{prefix}{name.upper()}' in environ})
 
 
-class PerceptionConfig(BaseModel):
+class PerceptionConfig(FiniteConfig):
     detection_confidence: float = Field(default=0.5, ge=0, le=1)
     presence_confidence: float = Field(default=0.5, ge=0, le=1)
     tracking_confidence: float = Field(default=0.5, ge=0, le=1)
@@ -57,13 +65,13 @@ class PerceptionConfig(BaseModel):
         return self
 
     @classmethod
-    def from_env(cls):
-        return settings_from_env(cls, 'POMO_PERCEPTION_')
+    def from_env(cls, environ=None):
+        return settings_from_env(cls, 'POMO_PERCEPTION_', environ)
 
 
-class BehaviourConfig(BaseModel):
+class BehaviourConfig(FiniteConfig):
     tracking_loss_grace_seconds: float = Field(default=1, ge=0, le=30)
-    absence_seconds: float = Field(default=10, gt=0, le=3600)
+    absence_seconds: float = Field(default=5, gt=0, le=3600)
     return_seconds: float = Field(default=0.5, ge=0, le=30)
     observation_max_age_seconds: float = Field(default=1, gt=0, le=60)
 
@@ -74,5 +82,57 @@ class BehaviourConfig(BaseModel):
         return self
 
     @classmethod
-    def from_env(cls):
-        return settings_from_env(cls, 'POMO_')
+    def from_env(cls, environ=None):
+        return settings_from_env(cls, 'POMO_', environ)
+
+
+def _boolean(environ, name, default):
+    value = environ.get(name, default).strip().lower()
+    if value not in {"true", "false"}:
+        raise ValueError(f"{name} must be true or false")
+    return value == "true"
+
+
+def _number(environ, name, default):
+    try:
+        return float(environ.get(name, default))
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} must be a finite number") from error
+
+
+@dataclass(frozen=True)
+class Settings:
+    host: str
+    port: int
+    dev_controls: bool
+    sound_enabled: bool
+    policy: PolicyConfig
+    camera: CameraConfig
+    perception: PerceptionConfig
+    behaviour: BehaviourConfig
+
+    @classmethod
+    def from_env(cls, environ=None):
+        environ = os.environ if environ is None else environ
+        host = environ.get("POMO_HOST", "127.0.0.1").strip()
+        if not host:
+            raise ValueError("POMO_HOST must not be empty")
+        try:
+            port = int(environ.get("POMO_PORT", "8000"))
+        except (TypeError, ValueError) as error:
+            raise ValueError("POMO_PORT must be an integer between 1 and 65535") from error
+        if not 1 <= port <= 65535:
+            raise ValueError("POMO_PORT must be between 1 and 65535")
+        return cls(
+            host=host, port=port,
+            camera=CameraConfig.from_env(environ),
+            perception=PerceptionConfig.from_env(environ),
+            behaviour=BehaviourConfig.from_env(environ),
+            dev_controls=_boolean(environ, "POMO_DEV_CONTROLS", "true"),
+            sound_enabled=_boolean(environ, "POMO_SOUND_ENABLED", "false"),
+            policy=PolicyConfig(
+                absence_seconds=_number(environ, "POMO_ABSENCE_SECONDS", "5"),
+                cooldown_seconds=_number(environ, "POMO_REMINDER_COOLDOWN_SECONDS", "30"),
+                observation_timeout_seconds=_number(environ, "POMO_OBSERVATION_TIMEOUT_SECONDS", "3"),
+            ),
+        )

@@ -7,7 +7,8 @@ These instructions apply to the whole repository. Apply any more specific reposi
 1. Read [README.md](README.md) for setup, scope and current behaviour. Read its phases and TODO section when present.
 2. Run `git status --short --branch` and inspect existing changes. Preserve work made by the user or other contributors.
 3. Read the relevant implementation and tests. For communication changes, also read [docs/protocol.md](docs/protocol.md); for dependency decisions, read [docs/stack.md](docs/stack.md).
-4. Implement the requested task. A roadmap or TODO list is not an instruction to implement every remaining feature.
+4. Read entries relevant to the task in [docs/agent-discussion.md](docs/agent-discussion.md), including replies and recorded decisions. Check their evidence against current code and the task owner's request.
+5. Implement the requested task. A roadmap or TODO list is not an instruction to implement every remaining feature.
 
 Use checked-in documentation and current code as shared context. Linked planning tools can provide additional context, but access to the original author's chat or private workspace is not required for ordinary development.
 
@@ -20,7 +21,7 @@ Pomo is a desktop robot study companion. The software prototype uses a browser s
 - **Phase 3: Test and Validate.** Detection evaluation, deterministic behaviour tests, recovery, usability and installation checks.
 - Pomodoro/session controls and voice recognition are deferred. Implement them when requested as a separate task.
 
-The current baseline provides manual display previews, browser webcam capture, bounded JPEG ingestion, camera ownership and a long-lived processing worker. Timestamped face observations and a sustained-absence reminder policy are implemented. Head direction and blendshapes are diagnostics only. Detection data does not select manual expressions or drive the robot face. Physical-camera validation and firmware remain pending. Verify this baseline against the code before making status claims, and update the documentation as implementation progresses.
+The current baseline includes a five-state reminder policy, timestamped observation ingestion, simulated observations, dismissal/cooldown, global monitoring/power/mute and bounded debug logs. Browser camera capture, bounded JPEG ingestion, Face Landmarker and head/eye diagnostics are integrated with that policy. Physical-camera evaluation and firmware remain pending. Verify this baseline against the code before making status claims, and update the documentation as implementation progresses.
 
 The initial detection target is whether the user leaves the frame. Presence and head direction do not prove attention or distraction. Camera or connection failure must be represented as unavailable/unknown input rather than user absence.
 
@@ -52,7 +53,10 @@ Defaults are `POMO_HOST=127.0.0.1`, `POMO_PORT=8000` and `POMO_DEV_CONTROLS=true
 
 | Location | Responsibility |
 | --- | --- |
-| `backend/app.py` | FastAPI factory, command schema, shared state and WebSocket transport |
+| `backend/app.py` | FastAPI factory, strict commands, observation ownership, timer and broadcasts |
+| `backend/policy.py` | Camera-independent state/reminder policy, freshness and bounded events |
+| `backend/config.py` | Validated server, reminder, camera and perception configuration |
+| `backend/camera.py`, `backend/perception.py`, `backend/eyes.py` | Dedicated JPEG/model worker and diagnostic observations |
 | `backend/__main__.py` | Configuration loading and server startup |
 | `simulator/` | HTML/CSS/JavaScript display, controls and connection handling |
 | `firmware/` | Physical integration notes; future hardware adapter |
@@ -73,8 +77,9 @@ Preserve these contracts unless the requested task changes them. Update the back
 - Commands are strictly validated. Invalid input must not mutate state or crash the server.
 - All clients currently share one in-memory robot state. Use one backend worker while state remains process-local.
 - Each accepted command increments the revision and broadcasts a complete snapshot. New/reconnecting clients receive current state.
-- Current display identifiers are `ready`, `possible_absence`, `reminding` and `unavailable`. Keep identifiers consistent across Python, JavaScript, tests and docs.
-- Monitoring changes reset the display to `ready`; enabling reserves a browser camera session for the sending WebSocket. Manual expression previews can run while monitoring is paused when development controls are enabled.
+- Protocol 7 display identifiers are `ready`, `shutdown`, `distraction`, `reminding` and `unavailable`. Keep identifiers consistent across Python, JavaScript, tests and docs; v1 `possible_absence` is replaced by `distraction`.
+- Protocol 7 combines the former v2 reminders and v6 camera contracts. `set_input_source` selects camera or simulated input while paused; only the camera owner receives its upload token. Keep raw `camera_observation` diagnostics separate from normalized policy `observation`.
+- Monitoring changes discard observations and active reminders and rotate the session token. Pausing shows `ready`; enabling without fresh input shows `unavailable`. Manual previews require power on, monitoring paused and development controls enabled.
 - Manual previews are rendering controls, not detection observations or evidence of a triggered reminder.
 - Controls remain disabled until a valid snapshot arrives. Disconnection marks displayed state stale; offline commands are not queued for replay.
 - Keep connection health, camera availability, monitoring state and display state distinct.
@@ -89,12 +94,12 @@ Avoid marketing copy, introductory hero sections, slogans and phase banners. Kee
 
 For Phase 2 changes:
 
-- Make camera sources, duration thresholds configurable; document new settings in `.env.example` and the README.
+- Make camera sources, duration thresholds and cooldowns configurable; document new settings in `.env.example` and the README.
 - Keep frame previews and observation diagnostics in the development interface.
 - Timestamp observations, reject stale input and handle uncertain results, temporary tracking loss and unavailable cameras explicitly.
 - Pause/unavailable input must stop new detection-driven reminders. Resume with fresh observations and release camera resources on shutdown.
-- Keep reminders supportive. Implement dismissal as backend behaviour; make optional sound independently muteable.
-- Keep capture/processing local for the laptop prototype unless the task explicitly introduces browser capture or a remote transport.
+- Keep reminders supportive. Implement dismissal and cooldown as backend behaviour; make optional sound independently muteable.
+- The integrated prototype captures in the browser and processes frames in the Python worker. Run both on localhost for laptop use. JPEG frames use `/camera/frame`, never the JSON command channel; do not persist them.
 - Keep camera images/video out of persistent storage, logs, commits and test fixtures by default. Prefer synthetic observations for automated tests.
 
 ## Validation
@@ -102,8 +107,8 @@ For Phase 2 changes:
 Match checks to the change:
 
 - **Backend or protocol:** run the integration suite; add meaningful tests for new behaviour and regressions.
-- **Detection/reminder policy:** use synthetic observations and a controllable clock for thresholds, dismissal, pause/resume and unavailable-input cases. Core logic tests must run without a physical camera or fixed timing sleeps.
-- **Simulator:** check the changed controls, expressions, connection states and narrow layouts in a browser when available. If Node.js is available, `node --check simulator/app.js` checks JavaScript syntax; Node is not an application runtime requirement.
+- **Detection/reminder policy:** use synthetic observations and a controllable clock for thresholds, cooldown, dismissal, pause/resume and unavailable-input cases. Core logic tests must run without a physical camera or fixed timing sleeps.
+- **Simulator:** check changed controls, expressions, connection states and narrow layouts in a browser when available. If Node.js is available, run `node --test tests/test_simulator.js tests/test_simulator.cjs tests/test_camera_client.cjs`, `node --check simulator/app.js` and `node --check simulator/camera.js`; Node is not an application runtime requirement.
 - **Scripts:** run `sh -n scripts/setup.sh scripts/dev.sh`; verify setup/startup when those paths change.
 - **Dependencies:** verify environment setup/update, run `pip check` through Conda and run relevant tests.
 - **Documentation only:** check accuracy, local links, commands and `git diff --check`; application tests are not required for prose-only edits.
@@ -112,6 +117,7 @@ Report the exact checks and outcomes. State when a camera, browser, operating sy
 
 ## Team Workflow and Handoff
 
+- Use [docs/agent-discussion.md](docs/agent-discussion.md) to exchange relevant proposals, questions, replies, decisions and handoffs. Follow its entry template, append replies with related entry IDs, preserve other contributors' entries and distinguish proposals from actual decisions. A local file edit is shared only through the normal Git workflow; it does not notify other agents automatically.
 - Respect the task owner's branch choice. For new team work, prefer a focused short-lived branch such as `feature/camera-input` or `fix/reconnect-state`, with reviewed working changes integrated into `main`.
 - Keep each change focused. Do not discard unrelated changes, rewrite shared history or force-push shared branches. Follow the task's authorised scope for commits, pushes, pull requests and merges.
 - Update README progress/TODO items when work is implemented and verified. Keep planned features and completed work clearly labelled.

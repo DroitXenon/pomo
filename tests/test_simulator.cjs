@@ -1,185 +1,243 @@
-const {test} = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-function setup(t) {
-  const nodes = new Map();
-  const events = {};
-  const node = (id) => {
-    if (!nodes.has(id)) {
-      const element={children:[],hidden:false,width:640,height:480,attributes:{},
-        datasetWrites:{},textWrites:0,
-        setAttribute(name,value){this.attributes[name]=value;},
-        getContext:()=>({clearRect(){},strokeRect(){}}),prepend(){},replaceChildren(){}};
-      element.dataset=new Proxy({}, {set(target,name,value){
-        element.datasetWrites[name]=(element.datasetWrites[name]||0)+1;
-        target[name]=value;
-        return true;
-      }});
-      let content='';
-      Object.defineProperty(element,'textContent',{
-        get:()=>content,set(value){content=value;element.textWrites++;}
-      });
-      nodes.set(id,element);
-    }
-    return nodes.get(id);
-  };
-  const previews=['ready','possible_absence','reminding','unavailable'].map(display=>{
-    const button=node(`preview-${display}`);
-    button.dataset.preview=display;
-    return button;
+const {test} = require("node:test");
+const assert = require("node:assert/strict");
+const {browser, snapshot} = require("./simulator_helpers.cjs");
+
+function setup(t, overrides = {}) {
+  const b = browser();
+  const state = snapshot({
+    monitoring_enabled: true, camera_status: "available", camera_capture_status: "available",
+    input_source: "camera", camera_session: "owner-session",
+    observation: {presence: "present", source: "camera", observed_at: 1800000000, age_seconds: 0},
+    camera_tracking_status: "present", camera_armed: true, frames_received: 1,
+    head_direction: "left",
+    camera_observation: {presence: "present", reason: "usable",
+      head_pose: {yaw: 40, pitch: 0, roll: 0}, blendshapes: {jawOpen: 0.25}},
+    ...overrides
   });
-  const sockets=[];
-  class Socket {
-    static OPEN=1;
-    constructor(){this.readyState=1;sockets.push(this);}
-    close() {this.onclose?.();}
-    send(value){this.sent=value;}
-  }
-  class Camera {update(){} stop(){}}
-  const context = vm.createContext({
-    document:{getElementById:node,querySelectorAll:()=>previews,createElement:()=>node('li'),
-              addEventListener:(name,fn)=>{events[name]=fn;}},
-    window:{location:{href:'http://localhost:8000/'},addEventListener:(name,fn)=>{events[name]=fn;}},
-    location:{protocol:'http:'},WebSocket:Socket,CameraController:Camera,
-    URL,Date,setTimeout,clearTimeout
-  });
-  vm.runInContext(fs.readFileSync('simulator/app.js','utf8'),context);
-  t.after(()=>events.pagehide());
-  const state = {protocol_version:6,type:'state',monitoring_enabled:true,display:'ready',
-    camera_status:'available',revision:1,dev_controls:true,camera_session:'session',
-    behaviour:{status:'present',armed:true,reminder_active:false,absence_seconds:0},
-    head_direction:'left',observation:{presence:'present',reason:'usable',
-      head_pose:{yaw:40,pitch:0,roll:0},blendshapes:{jawOpen:0.25}}};
-  const message=(next)=>sockets[0].onmessage({data:JSON.stringify(next)});
-  return {node,state,message,sockets};
+  const message = (next) => b.sockets[0].receive(next);
+  t.after(() => b.listeners.pagehide());
+  return {...b, node: (id) => b.elements[id], state, message};
 }
-test('shows observations without a reminder',t=>{
-  const {node,state,message}=setup(t);
+
+test("camera observations, diagnostics and normalized policy input coexist", (t) => {
+  const {node, state, message} = setup(t);
   message(state);
-  assert.equal(node('face-presence').textContent,'Present');
-  assert.equal(node('head-direction').textContent,'left');
-  assert.equal(node('dismiss-reminder').hidden,true);
-  assert.match(node('mouth-movement').textContent,/jawOpen: 0.25/);
-});
-test('real reminders can be dismissed while manual previews have no prompt',t=>{
-  const {node,state,message,sockets}=setup(t);
-  state.display='reminding';
-  message(state);
-  assert.equal(node('reminder-message').hidden,true);
-  state.behaviour.reminder_active=true;
-  message(state);
-  assert.equal(node('dismiss-reminder').disabled,false);
-  assert.equal(node('reminder-message').hidden,false);
-  node('dismiss-reminder').onclick();
-  assert.equal(JSON.parse(sockets[0].sent).type,'dismiss_reminder');
-});
-test('uncertain input has independent camera status',t=>{
-  const {node,state,message}=setup(t);
-  state.observation={presence:'unknown',reason:'low_light'};
-  state.display='unavailable';
-  state.behaviour.status='uncertain';
-  message(state);
-  assert.equal(node('face-presence').textContent,'Unknown');
-  assert.equal(node('image-quality').textContent,'Low light');
-  assert.match(node('detection-status').textContent,/reminders suspended/);
+  assert.equal(node("face-presence").textContent, "Present");
+  assert.equal(node("head-direction").textContent, "left");
+  assert.equal(node("reminder-panel").hidden, true);
+  assert.match(node("mouth-movement").textContent, /jawOpen: 0.25/);
+  assert.equal(node("observation-current").textContent, "Present");
+  assert.equal(node("observation-source").textContent, "Camera");
 });
 
-test('head direction and angles appear automatically',t=>{
-  const {node,state,message}=setup(t);
+test("real reminders use the shared dismissal id while expression previews have no prompt", (t) => {
+  const {node, state, message, sockets} = setup(t, {monitoring_enabled: false, camera_session: null});
+  state.display = "reminding";
   message(state);
-  assert.equal(node('head-direction').textContent,'left');
-  assert.match(node('head-angles').textContent,/Yaw 40°/);
-  assert.match(node('head-angles').textContent,/roll 0°/);
+  assert.equal(node("reminder-panel").hidden, true);
+  assert.equal(node("preview-status").hidden, false);
+  state.monitoring_enabled = true;
+  state.behavior_state = "reminding";
+  state.reminder = {active: true, id: 7, message: "A gentle reminder"};
+  message(state);
+  assert.equal(node("dismiss").disabled, false);
+  assert.equal(node("reminder-panel").hidden, false);
+  node("dismiss").onclick();
+  assert.deepEqual(sockets[0].sent.at(-1), {type: "dismiss_reminder", reminder_id: 7});
 });
 
-test('eye and mouth movement have separate labels and scores',t=>{
-  const {node,state,message}=setup(t);
-  state.observation.eye_movement={eyeLeft:{direction:'up',blink_score:0.55},eyeRight:{direction:'right',blink_score:0.48}};
-  state.observation.blendshapes={eyeBlinkLeft:0.33,eyeBlinkRight:0.288,
-    jawOpen:0,mouthSmileLeft:0,mouthSmileRight:0};
+test("uncertain camera observations stay distinct from capture availability", (t) => {
+  const {node, state, message} = setup(t);
+  state.camera_observation = {presence: "unknown", reason: "low_light"};
+  state.observation = {presence: "unknown", source: "camera", observed_at: 1800000000, age_seconds: 0};
+  state.display = state.behavior_state = "unavailable";
+  state.camera_status = "unavailable";
+  state.camera_tracking_status = "uncertain";
   message(state);
-  assert.equal(node('eye-movement').textContent,
-    'eyeLeft: up · eyeRight: right · eyeBlinkLeft: 0.55 · eyeBlinkRight: 0.48');
-  assert.equal(node('mouth-movement').textContent,
-    'jawOpen: 0.00 · mouthSmileLeft: 0.00 · mouthSmileRight: 0.00');
-  state.observation={presence:'unknown'};
-  message(state);
-  assert.equal(node('eye-movement').textContent,
-    'eyeLeft: unknown · eyeRight: unknown · eyeBlinkLeft: — · eyeBlinkRight: —');
-  assert.equal(node('mouth-movement').textContent,
-    'jawOpen: — · mouthSmileLeft: — · mouthSmileRight: —');
+  assert.equal(node("face-presence").textContent, "Unknown");
+  assert.equal(node("image-quality").textContent, "Low light");
+  assert.match(node("detection-status").textContent, /reminders suspended/);
+  assert.equal(node("input-status").textContent, "Unavailable");
+  assert.equal(node("reminder-panel").hidden, true);
 });
 
-test('blink display follows continuous scores independently of the closed label',t=>{
-  const {node,state,message}=setup(t);
-  state.observation.eye_movement={eyeLeft:{direction:'center',blink_score:0},
-                                  eyeRight:{direction:'center',blink_score:0.2}};
-  for (const [direction,score,text] of [
-    ['center',0.50,'0.50'],['center',0.67,'0.67'],['center',0.83,'0.83'],
-    ['closed',0.92,'0.92'],['closed',1,'1.00'],['closed',0.92,'0.92'],['center',0.5,'0.50']
-  ]) {
-    state.observation.eye_movement.eyeLeft={direction,blink_score:score};
+test("head direction and finite angles appear without selecting a robot expression", (t) => {
+  const {node, state, message} = setup(t);
+  message(state);
+  assert.equal(node("head-direction").textContent, "left");
+  assert.match(node("head-angles").textContent, /Yaw 40°/);
+  assert.match(node("head-angles").textContent, /roll 0°/);
+  assert.equal(node("screen").dataset.display, "ready");
+});
+
+test("eye and mouth movement retain separate labels and continuous scores", (t) => {
+  const {node, state, message} = setup(t);
+  state.camera_observation.eye_movement = {eyeLeft: {direction: "up", blink_score: 0.55},
+    eyeRight: {direction: "right", blink_score: 0.48}};
+  state.camera_observation.blendshapes = {jawOpen: 0, mouthSmileLeft: 0, mouthSmileRight: 0};
+  message(state);
+  assert.equal(node("eye-movement").textContent, "eyeLeft: up · eyeRight: right · eyeBlinkLeft: 0.55 · eyeBlinkRight: 0.48");
+  assert.equal(node("mouth-movement").textContent, "jawOpen: 0.00 · mouthSmileLeft: 0.00 · mouthSmileRight: 0.00");
+  state.camera_observation = null;
+  message(state);
+  assert.equal(node("eye-movement").textContent, "eyeLeft: unknown · eyeRight: unknown · eyeBlinkLeft: — · eyeBlinkRight: —");
+  assert.equal(node("mouth-movement").textContent, "jawOpen: — · mouthSmileLeft: — · mouthSmileRight: —");
+});
+
+test("blink diagnostics stay continuous independently of closed-eye labels", (t) => {
+  const {node, state, message} = setup(t);
+  state.camera_observation.eye_movement = {eyeRight: {direction: "center", blink_score: 0.2}};
+  for (const [direction, score] of [["center", 0.50], ["center", 0.67], ["center", 0.83], ["closed", 0.92], ["closed", 1]]) {
+    state.camera_observation.eye_movement.eyeLeft = {direction, blink_score: score};
     message(state);
-    assert.match(node('eye-movement').textContent,new RegExp(`eyeLeft: ${direction}`));
-    assert.ok(node('eye-movement').textContent.includes(`eyeBlinkLeft: ${text}`));
-    assert.match(node('eye-movement').textContent,/eyeBlinkRight: 0.20/);
+    assert.ok(node("eye-movement").textContent.includes(`eyeLeft: ${direction}`));
+    assert.ok(node("eye-movement").textContent.includes(`eyeBlinkLeft: ${score.toFixed(2)}`));
+    assert.match(node("eye-movement").textContent, /eyeBlinkRight: 0.20/);
   }
 });
 
-test('vertical model signals are visible independently of blink and mouth scores',t=>{
-  const {node,state,message}=setup(t);
-  state.observation.blendshapes={eyeLookUpLeft:0.7,eyeLookDownLeft:0.1,
-    eyeLookUpRight:0.2,eyeLookDownRight:0.6};
+test("vertical model signals and signed iris offsets remain available for evaluation", (t) => {
+  const {node, state, message} = setup(t);
+  state.camera_observation.blendshapes = {eyeLookUpLeft: 0.7, eyeLookDownLeft: 0.1, eyeLookUpRight: 0.2, eyeLookDownRight: 0.6};
+  state.camera_observation.eye_movement = {eyeLeft: {direction: "up", vertical_offset: -0.125},
+    eyeRight: {direction: "center", vertical_offset: 0.015}};
   message(state);
-  assert.equal(node('eye-vertical-signals').textContent,
-    'eyeLookUpLeft: 0.70 · eyeLookDownLeft: 0.10 · eyeLookUpRight: 0.20 · eyeLookDownRight: 0.60');
-  state.observation=null;
+  assert.equal(node("eye-vertical-signals").textContent, "eyeLookUpLeft: 0.70 · eyeLookDownLeft: 0.10 · eyeLookUpRight: 0.20 · eyeLookDownRight: 0.60");
+  assert.equal(node("eye-vertical-offsets").textContent, "eyeLeft: -0.125 · eyeRight: 0.015");
+  state.camera_observation = null;
   message(state);
-  assert.equal(node('eye-vertical-signals').textContent,
-    'eyeLookUpLeft: — · eyeLookDownLeft: — · eyeLookUpRight: — · eyeLookDownRight: —');
+  assert.equal(node("eye-vertical-offsets").textContent, "eyeLeft: — · eyeRight: —");
 });
 
-test('detection snapshots preserve manual expression and do not repaint unchanged robot content',t=>{
-  const {node,state,message}=setup(t);
-  state.display='possible_absence';
+test("unchanged robot expressions are not repainted by raw diagnostic updates", (t) => {
+  const {node, state, message} = setup(t);
+  state.display = state.behavior_state = "distraction";
   message(state);
-  const expressionWrites=node('screen').datasetWrites.display;
-  const titleWrites=node('state-title').textWrites;
-  for (const status of ['present','possible_absence','reminding','uncertain','stale']) {
+  const writes = node("screen").datasetWrites.display;
+  const titleWrites = node("state-title").textWrites;
+  for (const status of ["present", "possible_absence", "reminding", "uncertain", "stale"]) {
     state.revision++;
-    state.behaviour.status=status;
-    state.behaviour.reminder_active=status==='reminding';
+    state.camera_tracking_status = status;
     message(state);
-    assert.equal(node('screen').dataset.display,'possible_absence');
-    assert.equal(node('preview-possible_absence').attributes['aria-pressed'],'true');
-    assert.equal(node('preview-reminding').attributes['aria-pressed'],'false');
-    assert.equal(node('screen').datasetWrites.display,expressionWrites);
-    assert.equal(node('state-title').textWrites,titleWrites);
+    assert.equal(node("screen").dataset.display, "distraction");
+    assert.equal(node("screen").datasetWrites.display, writes);
+    assert.equal(node("state-title").textWrites, titleWrites);
   }
-  state.display='ready';
+  state.display = state.behavior_state = "ready";
   message(state);
-  assert.equal(node('screen').dataset.display,'ready');
-  assert.equal(node('screen').datasetWrites.display,expressionWrites+1);
+  assert.equal(node("screen").datasetWrites.display, writes + 1);
 });
 
-test('signed iris offsets are visible for center and upward evaluation',t=>{
-  const {node,state,message}=setup(t);
-  state.observation.eye_movement={eyeLeft:{direction:'up',vertical_offset:-0.125},
-                                  eyeRight:{direction:'center',vertical_offset:0.015}};
+test("absence duration comes from the shared reminder engine", (t) => {
+  const {node, state, message} = setup(t);
+  state.camera_observation = {presence: "not_detected", reason: "no_face"};
+  state.observation = {presence: "absent", source: "camera", observed_at: 1800000000, age_seconds: 0};
+  state.absence_duration_seconds = 2.5;
+  state.camera_tracking_status = "absence";
+  state.camera_absence_duration_seconds = 8;
+  state.display = state.behavior_state = "distraction";
   message(state);
-  assert.equal(node('eye-vertical-offsets').textContent,'eyeLeft: -0.125 · eyeRight: 0.015');
-  state.observation=null;
-  message(state);
-  assert.equal(node('eye-vertical-offsets').textContent,'eyeLeft: — · eyeRight: —');
+  assert.equal(node("absence-duration").textContent, "2.5s");
+  assert.equal(node("detection-status").textContent, "Face not detected");
+  assert.equal(node("camera-absence").textContent, "8.0s");
+  assert.equal(node("camera-armed").textContent, "Confirmed");
+  assert.equal(node("screen").dataset.display, "distraction");
 });
 
-test('absence duration and possible-absence status render from the same snapshot',t=>{
-  const {node,state,message}=setup(t);
-  state.observation={presence:'not_detected',reason:'no_face'};
-  state.behaviour={status:'possible_absence',armed:false,absence_seconds:2.5,reminder_active:false};
+test("raw diagnostics tolerate missing or malformed optional values", (t) => {
+  const {node, state, message} = setup(t);
+  state.camera_observation = {presence: "constructor", reason: "constructor",
+    head_pose: {yaw: "bad", pitch: null}, face_box: [0, "bad", 1, 1], blendshapes: {jawOpen: "bad"}};
+  state.head_direction = null;
   message(state);
-  assert.equal(node('absence-duration').textContent,'2.5 s');
-  assert.equal(node('detection-status').textContent,'Possible absence');
-  assert.equal(node('screen').dataset.display,'ready');
+  assert.equal(node("connection").textContent, "Connected");
+  assert.equal(node("face-presence").textContent, "Unknown");
+  assert.equal(node("head-angles").textContent, "—");
+  assert.equal(node("image-quality").textContent, "—");
+  assert.match(node("mouth-movement").textContent, /jawOpen: —/);
+});
+
+test("source switching is paused-only and simulated mode does not start camera or heartbeat itself", () => {
+  const b = browser();
+  const socket = b.sockets[0];
+  socket.receive(snapshot());
+  assert.equal(b.cameras[0].session, null);
+  b.click(b.sources.find((button) => button.dataset.source === "simulated"));
+  assert.deepEqual(socket.sent.at(-1), {type: "set_input_source", source: "simulated"});
+  socket.receive(snapshot({input_source: "simulated"}));
+  assert.equal(b.elements["camera-panel"].hidden, true);
+  assert.equal(b.elements["simulation-panel"].hidden, false);
+  b.click("monitor");
+  socket.receive(snapshot({input_source: "simulated", monitoring_enabled: true}));
+  b.intervals();
+  assert.equal(socket.sent.filter((command) => command.type === "submit_observation").length, 0);
+  assert.ok(b.sources.every((button) => button.disabled));
+  b.click(b.observations.find((button) => button.dataset.observation === "absent"));
+  b.intervals();
+  assert.equal(socket.sent.filter((command) => command.type === "submit_observation").length, 2);
+  socket.receive(snapshot({input_source: "camera", monitoring_enabled: false}));
+  const count = socket.sent.length;
+  b.intervals();
+  assert.equal(socket.sent.length, count);
+  assert.equal(b.cameras[0].session, null);
+});
+
+test("only a valid owner snapshot starts capture and lifecycle actions stop it immediately", () => {
+  const b = browser();
+  assert.equal(b.cameras[0].updates.length, 0);
+  const socket = b.sockets[0];
+  socket.receive(snapshot({monitoring_enabled: true, camera_session: "owner-session", camera_capture_status: "starting"}));
+  assert.equal(b.cameras[0].session, "owner-session");
+  b.click("monitor");
+  assert.equal(b.cameras[0].session, null, "pause stops locally before waiting for its acknowledgement");
+  socket.receive(snapshot({monitoring_enabled: true, camera_session: "second-session", camera_capture_status: "starting"}));
+  b.click("power");
+  assert.equal(b.cameras[0].session, null);
+  socket.receive(snapshot({monitoring_enabled: true, camera_session: "third-session", camera_capture_status: "starting"}));
+  socket.close();
+  assert.equal(b.cameras[0].session, null);
+  assert.match(b.elements["camera-status"].textContent, /backend disconnected/);
+});
+
+test("a missing processor does not prevent selecting simulated input", () => {
+  const b = browser();
+  b.sockets[0].receive(snapshot({camera_processor_ready: false}));
+  assert.equal(b.elements.monitor.disabled, true);
+  assert.equal(b.sources.find((button) => button.dataset.source === "simulated").disabled, false);
+  b.click(b.sources.find((button) => button.dataset.source === "simulated"));
+  b.sockets[0].receive(snapshot({input_source: "simulated", camera_processor_ready: false}));
+  assert.equal(b.elements.monitor.disabled, false);
+});
+
+test("dev-controls gating applies to simulation while camera remains usable", () => {
+  const b = browser();
+  b.sockets[0].receive(snapshot({dev_controls: false}));
+  assert.equal(b.sources.find((button) => button.dataset.source === "simulated").disabled, true);
+  assert.equal(b.sources.find((button) => button.dataset.source === "camera").disabled, false);
+  assert.equal(b.elements.monitor.disabled, false);
+  assert.ok(b.previews.every((button) => button.disabled));
+});
+
+test("face overlay is owner-only and clears when observations are stale", (t) => {
+  const {node, state, message} = setup(t);
+  state.camera_observation.face_box = [0.1, 0.2, 0.6, 0.8];
+  state.last_frame = {width: 640, height: 480};
+  message(state);
+  assert.equal(node("face-overlay").context.strokeCalls.length, 1);
+  state.observation.age_seconds = 10;
+  message(state);
+  assert.equal(node("face-overlay").context.strokeCalls.length, 1);
+  state.observation.age_seconds = 0;
+  state.camera_session = null;
+  message(state);
+  assert.equal(node("face-overlay").context.strokeCalls.length, 1);
+  assert.ok(node("face-overlay").context.clearCalls >= 3);
+});
+
+test("legacy protocol 6 is rejected before camera permission is requested", () => {
+  const b = browser();
+  b.sockets[0].receive(snapshot({protocol_version: 6, monitoring_enabled: true, camera_session: "legacy-session"}));
+  assert.equal(b.cameras[0].updates.length, 0);
+  assert.equal(b.elements.monitor.disabled, true);
+  assert.equal(b.elements.connection.textContent, "Incompatible");
 });

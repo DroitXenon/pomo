@@ -39,6 +39,44 @@ Verified on macOS ARM64 with Conda 25.1.1 and Python 3.13.18:
 
 Conda setup on Windows and Linux has not been verified.
 
+## States, reminders and debug logs — 31 October 2026
+
+Implemented on `agent/feature/states` against the Reminders, States Implementation
+and Debug Logs task specifications linked in [protocol v2](protocol.md#task-sources).
+Verified on macOS ARM64 with the existing Python 3.13.18 Conda environment and
+Node.js 26.11.1. No dependency additions were required.
+
+- `conda run --name pomo python -m pytest -q`: 137 passed (41 pure-policy,
+  50 HTTP/WebSocket integration and 46 configuration cases). Timing tests use
+  injected monotonic/epoch clocks without camera hardware or timing sleeps.
+- `conda run --name pomo python -m pip check`: no broken requirements.
+- `node --test tests/test_simulator.js`: seven passed. These execute the actual
+  simulator JavaScript using mocked DOM, WebSocket, timers and audio objects;
+  they do not verify rendered layout or audible output in a browser.
+- `node --check simulator/app.js`, shell-script syntax checks and
+  `git diff --check` passed.
+- A real server started through `scripts/dev.sh` on a temporary localhost port.
+  `/`, `/health` and both static assets returned 200. A live observation producer
+  and viewer exercised threshold-driven reminders, restoration of an active
+  reminder on reconnect, no repeated active cue, dismissal with a full quiet
+  period, subsequent reminders, producer-disconnect invalidation, presence and
+  uncertain/unavailable input, global pause, soft shutdown/wake and mute.
+  Shortened smoke-check settings were 0.5 s absence, 1 s cooldown and 0.8 s input
+  timeout; committed defaults remain 5 s, 30 s and 3 s respectively.
+- Ctrl+C completed backend shutdown. Both temporary verification servers were
+  stopped afterwards.
+
+Remaining limits:
+
+- Browser access reported an unavailable host; native Arc/Chrome access failed
+  with `cgWindowNotFound`. Desktop/narrow rendered layout, browser interaction
+  and the physical audibility of the sound cue remain unverified for this change.
+- Real camera capture/perception and physical firmware are not implemented.
+  Metadata ingestion is ready for a separate camera adapter; no images/video
+  were captured or stored during these checks.
+- Windows, Linux, cloud proxy forwarding and teammate usability remain untested.
+- The existing Starlette/HTTPX test-adapter deprecation warning remains.
+
 ## Camera, observations and behaviour — 31 October–1 November 2026
 
 Implemented in `/home/vivian/pomo` on `feature/camera`, using the activated `pomo`
@@ -156,3 +194,49 @@ Physical head-turning accuracy remains unverified; 5 is a tunable prototype valu
 
 Activated `pomo`: the full backend suite passed **116 tests** in 4.50 seconds,
 with the existing Starlette/HTTPX warning. `git diff --check` passed.
+
+
+## Integrated camera and reminders — 4 November 2026
+
+The `feature/states` merge combines camera commit `4f069c4` from `main` with
+reminder commit `d3ebfef`. Earlier records above describe their separate branches;
+the integrated protocol is v7. Combined checks are recorded below. Physical webcam, browser permissions/layout, audible output
+and cross-platform accuracy are not established by unit or mocked-browser tests.
+
+- `sh scripts/setup.sh`: passed with Conda 25.1.1 on macOS ARM64. The fallback
+  filtered Linux-only native entries from a temporary copy of `environment.yml`;
+  the existing `pomo` environment was updated with the pinned OpenCV/MediaPipe
+  packages and the Face Landmarker model checksum verified. Local `.env` was not
+  changed. Recent-Conda CEP-24 handling remains available; see earlier WSL records.
+- `conda run --name pomo python -m pytest -q -o faulthandler_timeout=20`:
+  **266 passed**, one existing Starlette/HTTPX deprecation warning. Coverage includes
+  both original branches plus camera-to-reminder baseline/grace, cooldown, mute,
+  stale-vs-transport timeouts, recovery, power, source gating, private tokens and
+  rejected-result atomicity. Core timing tests use injected clocks.
+- `node --test tests/test_simulator.js tests/test_simulator.cjs tests/test_camera_client.cjs`:
+  **32 passed**. Mocked-browser checks execute the production JavaScript and cover
+  shared policy rendering, source switching, owner-only capture, diagnostics,
+  permission/encoder/upload cancellation, audio fallback/deduplication and stale UI.
+- `conda run --name pomo python -m pip check`: no broken requirements.
+- `node --check simulator/app.js`, `node --check simulator/camera.js`,
+  `sh -n scripts/setup.sh scripts/dev.sh` and `git diff --check`: passed.
+- A temporary real server on `127.0.0.1:8767` loaded the actual model. HTTP health
+  and all simulator assets returned 200; health reported protocol 7 and ready
+  camera processing. Live JPEG HTTP uploads plus WebSocket owner/viewer snapshots
+  passed: official public portrait -> stable baseline -> synthetic detailed noise
+  with no face -> real reminder -> viewer restoration -> ID-based dismissal and
+  cooldown -> black-frame low-light uncertainty -> shutdown/token invalidation ->
+  wake -> simulated absence reminder -> pause. Test settings were 0.5 s absence,
+  0.1 s grace, 0.1 s baseline and 0.5 s cooldown; shared defaults remain unchanged.
+  The public source was `https://storage.googleapis.com/mediapipe-assets/portrait.jpg`.
+  All images remained in memory; no personal camera input was acquired or stored.
+
+Protocol 7 replaces both prior branch protocols. Raw camera observations retain
+server monotonic timestamps; normalized policy observations use Unix receipt time
+with processing age preserved. The live application has one reminder policy.
+Any fresh presence clears a cue immediately; stable presence is the baseline for
+subsequent camera absence. Camera grace precedes the shared absence threshold.
+Physical camera permissions/accuracy, rendered desktop/narrow browser appearance,
+actual audible output and new Windows/Linux installs remain unverified in this
+integration run. Native model warnings and the existing test adapter warning did
+not fail the checks.

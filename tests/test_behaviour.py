@@ -40,7 +40,9 @@ def test_empty_initial_view_never_arms_or_reminds():
 
 
 def test_grace_and_exact_sustained_absence_threshold():
-    result = armed()
+    # Preserve the original camera policy's ten-second boundary regression even
+    # though the integrated application now defaults to a five-second threshold.
+    result = armed(absence_seconds=10)
     feed(result, 'not_detected', 1, 1.75)
     assert result.status == 'tracking_loss'
     result.observe(observation(2, 'not_detected'), 2)
