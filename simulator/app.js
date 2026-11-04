@@ -16,7 +16,9 @@ let state = null, simulatedInput = null, clearedEventsThrough = 0;
 let audioContext = null, audioIssue = "", currentTone = null;
 const seenReminders = new Set();
 const camera = new CameraController($("camera-preview"), $("camera-status"), (message) => {
-  feedback(message);
+  const reason = typeof message === "string" ? message.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 300) : "Camera capture failed. Retry the camera when ready.";
+  feedback(reason);
+  log(`Camera: ${reason}`);
   if (connected && state?.input_source === "camera" && state.camera_session) send({type: "camera_failed"}, false);
 });
 
@@ -505,8 +507,7 @@ window.addEventListener("pageshow", (event) => {
 });
 document.addEventListener("visibilitychange", () => {
   if (document.hidden && camera.session) {
-    stopCamera("Camera stopped · tab hidden. Retry when you return.");
-    send({type: "camera_failed"}, false);
+    camera.fail("Pomo tab hidden. Keep this tab visible and retry the camera.", camera.generation);
   }
 });
 connect();

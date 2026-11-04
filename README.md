@@ -293,6 +293,31 @@ For a camera demonstration, pause, select Camera, enable and grant permission. S
 
 The debug panel shows current observation/source/age, absence duration, cooldown, actual state and backend events. Clearing the browser log clears that tab's view only; it does not erase shared backend history.
 
+### No camera preview
+
+Open the app directly at `http://127.0.0.1:8000` or a validated HTTPS origin.
+Allow camera access for that site and for the browser in macOS **System Settings
+→ Privacy & Security → Camera**. In Chrome, **Settings → Privacy and security →
+Site settings → Camera** also lets you select the intended physical camera.
+See [Chrome camera permissions](https://support.google.com/chrome/answer/2693767)
+and [macOS camera access](https://support.apple.com/guide/mac-help/mchlf6d108da/mac).
+
+Keep the Pomo tab visible while starting capture. Switching tabs/apps can stop
+capture, including while permission is pending. Return to Pomo and use **Retry
+camera** after changing permissions or camera settings. Pause other camera apps
+if the browser reports that it cannot start the device.
+
+Read the message below the camera preview and the main feedback area. Capture,
+preview playback, frame encoding and upload errors have separate explanations;
+a preview-playback failure does not mean camera permission was denied. Include
+that exact message, browser and page address when reporting a failure.
+
+`camera_processor_ready: true` in `/health` confirms model initialization, while
+`camera_started` records a browser capture request. Neither confirms that browser
+video has started. Successful `POST /camera/frame` requests confirm frame delivery.
+Favicon, Apple touch icon and Chrome DevTools discovery 404s are unrelated to
+camera capture.
+
 ## Deployment Constraints
 
 For a cloud development workspace, install Conda, run setup and start the server with:
