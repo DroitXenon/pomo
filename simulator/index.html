@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pomo · Simulator</title>
-  <link rel="stylesheet" href="style.css?v=4"><script src="app.js?v=4" defer></script>
+  <link rel="stylesheet" href="style.css?v=9"><script src="camera.js?v=3" defer></script><script src="app.js?v=15" defer></script>
 </head>
 <body>
   <header>
@@ -33,24 +33,56 @@
         <p id="feedback" role="status" class="feedback"></p>
       </section>
       <aside class="controls-panel" aria-label="Simulator controls">
-        <h2>Simulated input</h2>
-        <div class="inputs">
-          <button data-observation="present" disabled>Present</button>
-          <button data-observation="absent" disabled>Absent</button>
-          <button data-observation="unknown" disabled>Uncertain</button>
-          <button data-observation="unavailable" disabled>Unavailable</button>
+        <h2>Input source</h2>
+        <div class="inputs" role="group" aria-label="Input source">
+          <button data-source="camera" disabled>Camera</button>
+          <button data-source="simulated" disabled>Simulated</button>
         </div>
-        <p id="simulation-status" class="small">Enable monitoring, then select an input.</p>
+        <p id="source-status" class="small">Pause monitoring to change the input source.</p>
+        <section id="camera-panel" class="camera-panel" aria-label="Camera preview">
+          <div class="camera-view">
+            <video id="camera-preview" autoplay muted playsinline aria-label="Live camera preview"></video>
+            <canvas id="face-overlay" width="640" height="480" aria-hidden="true"></canvas>
+          </div>
+          <p id="camera-status" class="small" role="status">Camera paused</p>
+          <button id="retry-camera" hidden disabled>Retry camera</button>
+          <details class="diagnostics">
+            <summary>Camera diagnostics</summary>
+            <p id="detection-status" class="small" role="status">Detection paused</p>
+            <div class="detail-row"><span>Face</span><strong id="face-presence">Unknown</strong></div>
+            <div class="detail-row"><span>Head direction</span><strong id="head-direction">Unknown</strong></div>
+            <div class="detail-row"><span>Head angles</span><strong id="head-angles">—</strong></div>
+            <div class="detail-row"><span>Image quality</span><strong id="image-quality">—</strong></div>
+            <div class="detail-row"><span>Presence baseline</span><strong id="camera-armed">—</strong></div>
+            <div class="detail-row"><span>Camera absence</span><strong id="camera-absence">—</strong></div>
+            <div class="detail-row"><span>Frames received</span><strong id="frames-received">0</strong></div>
+            <div class="detail-row"><span>Eye movement</span><strong id="eye-movement">—</strong></div>
+            <div class="detail-row"><span>Iris vertical offsets</span><strong id="eye-vertical-offsets">—</strong></div>
+            <div class="detail-row"><span>Vertical eye signals</span><strong id="eye-vertical-signals">—</strong></div>
+            <div class="detail-row"><span>Mouth movement</span><strong id="mouth-movement">—</strong></div>
+            <p class="small">Head, eye and mouth measurements are diagnostics; they do not establish attention.</p>
+          </details>
+        </section>
+        <section id="simulation-panel" hidden aria-label="Simulated observations">
+          <h2>Simulated observations</h2>
+          <div class="inputs">
+            <button data-observation="present" disabled>Present</button>
+            <button data-observation="absent" disabled>Absent</button>
+            <button data-observation="unknown" disabled>Uncertain</button>
+            <button data-observation="unavailable" disabled>Unavailable</button>
+          </div>
+          <p id="simulation-status" class="small">Enable monitoring, then select an input.</p>
+          <p class="small">Development input only. Simulated observations do not open a camera.</p>
+        </section>
         <dl class="observations">
           <div><dt>Observation</dt><dd id="observation-current">—</dd></div>
           <div><dt>Source</dt><dd id="observation-source">—</dd></div>
-          <div><dt>Camera input</dt><dd id="camera-status">—</dd></div>
+          <div><dt>Detection input</dt><dd id="input-status">—</dd></div>
           <div><dt>Absence duration</dt><dd id="absence-duration">—</dd></div>
           <div><dt>Cooldown left</dt><dd id="cooldown-status">—</dd></div>
           <div><dt>Observation age</dt><dd id="observation-age">—</dd></div>
         </dl>
         <p id="policy-settings" class="small"></p>
-        <p class="small">Simulated observations only. No camera images are captured here.</p>
         <details class="diagnostics">
           <summary>Expression previews</summary>
           <p id="previews-status" class="small">Pause monitoring to preview expressions.</p>

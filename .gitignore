@@ -4,3 +4,8 @@ __pycache__/
 .env
 *.log
 .DS_Store
+
+models/*.task
+condaenv.*.requirements.txt
+models/*.download
+.tools/

@@ -7,8 +7,14 @@ import anyio
 from fastapi.testclient import TestClient
 import pytest
 
-from backend.app import create_app
+from backend.app import create_app as app_factory
+from tests.camera_helpers import DecodeProcessor
 from backend.policy import PolicyConfig
+
+
+def create_app(*args, **kwargs):
+    kwargs.setdefault("processor_factory", DecodeProcessor)
+    return app_factory(*args, **kwargs)
 
 
 class FakeClock:
@@ -35,6 +41,10 @@ def rig():
         clock=clock.monotonic, wall_clock=clock.wall, run_ticker=False,
     )
     with TestClient(app) as client:
+        with client.websocket_connect("/ws") as setup:
+            setup.receive_json()
+            state = command(setup, "set_input_source", source="simulated")
+            assert state["input_source"] == "simulated"
         yield client, app, clock
 
 
@@ -88,7 +98,7 @@ def close_and_wait(client, app, ws, expected_clients):
 def test_health_static_and_protocol_defaults(rig):
     client, _, _ = rig
     assert client.get("/health").json() == {
-        "status": "ok", "phase": 2, "protocol_version": 2,
+        "status": "ok", "phase": 2, "protocol_version": 7, "camera_processor_ready": True,
     }
     assert "Pomo" in client.get("/").text
     assert client.get("/app.js").status_code == 200
@@ -96,8 +106,8 @@ def test_health_static_and_protocol_defaults(rig):
     with client.websocket_connect("/ws") as ws:
         state = ws.receive_json()
         assert state["type"] == "state"
-        assert state["protocol_version"] == 2
-        assert state["revision"] == 0
+        assert state["protocol_version"] == 7
+        assert state["revision"] == 1
         assert state["instance_id"] and state["observation_session"]
         assert state["powered_on"] is True
         assert state["monitoring_enabled"] is False
@@ -113,13 +123,46 @@ def test_commands_broadcast_identical_snapshots_to_all_clients(rig):
         b.receive_json()
         state = command(a, "set_monitoring", enabled=True)
         assert state == b.receive_json()
-        assert state["revision"] == 1 and state["display"] == "unavailable"
-        state = observe(a, clock, state, "present", "camera")
+        assert state["revision"] == 2 and state["display"] == "unavailable"
+        state = observe(a, clock, state, "present", "simulated")
         assert state == b.receive_json()
-        assert state["revision"] == 2 and state["display"] == "ready"
+        assert state["revision"] == 3 and state["display"] == "ready"
         state = command(b, "set_muted", muted=False)
         assert state == a.receive_json()
-        assert state["revision"] == 3 and state["muted"] is False
+        assert state["revision"] == 4 and state["muted"] is False
+
+
+def test_input_source_changes_require_pause_and_power_and_clear_old_generation(rig):
+    client, app, _ = rig
+    with client.websocket_connect('/ws') as ws:
+        state = ws.receive_json()
+        old_session = state['observation_session']
+        state = command(ws, 'set_input_source', source='camera')
+        assert state['input_source'] == 'camera'
+        assert state['observation_session'] != old_session
+        state = command(ws, 'set_monitoring', enabled=True)
+        before = current(client, app)
+        assert command(ws, 'set_input_source', source='simulated')['type'] == 'error'
+        assert without_events(current(client, app)) == without_events(before)
+        state = command(ws, 'set_monitoring', enabled=False)
+        assert state['camera_session'] is None
+        state = command(ws, 'set_power', enabled=False)
+        before = current(client, app)
+        assert command(ws, 'set_input_source', source='simulated')['type'] == 'error'
+        assert without_events(current(client, app)) == without_events(before)
+        state = command(ws, 'set_power', enabled=True)
+        state = command(ws, 'set_input_source', source='simulated')
+        assert state['input_source'] == 'simulated'
+
+
+def test_camera_metadata_cannot_bypass_selected_camera_frame_pipeline(rig):
+    client, app, clock = rig
+    with client.websocket_connect('/ws') as ws:
+        ws.receive_json()
+        state = command(ws, 'set_monitoring', enabled=True)
+        before = current(client, app)
+        assert observe(ws, clock, state, source='camera')['type'] == 'error'
+        assert without_events(current(client, app)) == without_events(before)
 
 
 @pytest.mark.parametrize("display", ["ready", "shutdown", "distraction", "reminding", "unavailable"])
@@ -154,6 +197,13 @@ def test_previews_are_separate_from_policy_and_real_reminders(rig, display):
     '{"type":"dismiss_reminder","reminder_id":1.0}',
     '{"type":"dismiss_reminder","reminder_id":0}',
     '{"type":"clear_preview","display":"ready"}',
+    '{"type":"set_input_source"}',
+    '{"type":"set_input_source","source":"browser"}',
+    '{"type":"set_input_source","source":null}',
+    '{"type":"set_input_source","source":"camera","enabled":true}',
+    '{"type":"camera_failed","enabled":false}',
+    '{"type":"camera_failed","source":"camera"}',
+    '{"type":"camera_failed","session_id":"private-session"}',
     '{"type":"preview_display","display":"possible_absence"}',
     '{"type":"preview_display","display":null}',
     pytest.param("x" * 4097, id="oversized-text"),
@@ -195,7 +245,7 @@ def test_stale_future_duplicate_and_out_of_order_input_is_rejected(rig):
     with client.websocket_connect("/ws") as ws:
         ws.receive_json()
         state = command(ws, "set_monitoring", enabled=True)
-        state = observe(ws, clock, state, "present", "camera")
+        state = observe(ws, clock, state, "present", "simulated")
         for timestamp in (clock.wall() - 3, clock.wall() + 1.01,
                           clock.wall(), clock.wall() - 0.1):
             before = current(client, app)
@@ -292,11 +342,11 @@ def test_frame_arriving_after_expiry_cannot_beat_the_timer_with_an_old_session(r
     with client.websocket_connect("/ws") as ws:
         ws.receive_json()
         state = command(ws, "set_monitoring", enabled=True)
-        state = observe(ws, clock, state, source="camera")
+        state = observe(ws, clock, state, source="simulated")
         old_session = state["observation_session"]
         clock.advance(3.1)
         before = current(client, app)
-        error = observe(ws, clock, state, source="camera")
+        error = observe(ws, clock, state, source="simulated")
         assert error["type"] == "error"
         assert without_events(current(client, app)) == without_events(before)
         assert current(client, app)["observation_session"] == old_session
@@ -307,7 +357,7 @@ def test_frame_arriving_after_expiry_cannot_beat_the_timer_with_an_old_session(r
         assert state["display"] == "unavailable"
         assert state["observation"]["source"] == "none"
         assert state["reminder"]["active"] is False
-        state = observe(ws, clock, state, source="camera")
+        state = observe(ws, clock, state, source="simulated")
         assert state["display"] == "distraction"
         assert state["absence_duration_seconds"] == 0
         assert state["reminder"]["active"] is False
@@ -361,33 +411,40 @@ def test_dev_controls_disable_simulation_but_allow_camera_producer():
     with TestClient(app) as client, client.websocket_connect("/ws") as ws:
         state = ws.receive_json()
         assert state["dev_controls"] is False
+        assert state["input_source"] == "camera"
         assert command(ws, "preview_display", display="reminding")["type"] == "error"
         assert command(ws, "clear_preview")["type"] == "error"
+        assert command(ws, "set_input_source", source="simulated")["type"] == "error"
         state = command(ws, "set_monitoring", enabled=True)
+        assert state["camera_session"]
         before = current(client, app)
         assert observe(ws, clock, state)["type"] == "error"
         assert without_events(current(client, app)) == without_events(before)
-        state = observe(ws, clock, state, "present", "camera")
-        assert state["display"] == "ready" and state["observation"]["source"] == "camera"
+        from tests.test_camera import upload
+        assert upload(client, state["camera_session"]).status_code == 200
+        state = ws.receive_json()
+        assert state["frames_received"] == 1
+        assert state["camera_observation"]["presence"] == "unknown"
+        assert state["reminder"]["active"] is False
 
 
-def test_viewer_disconnect_preserves_camera_and_reconnect_has_current_reminder(rig):
+def test_viewer_disconnect_preserves_simulated_source_and_reconnect_has_current_reminder(rig):
     client, app, clock = rig
     with client.websocket_connect("/ws") as producer:
         producer.receive_json()
         state = command(producer, "set_monitoring", enabled=True)
-        state = observe(producer, clock, state, source="camera")
+        state = observe(producer, clock, state, source="simulated")
         with client.websocket_connect("/ws") as viewer:
             viewer.receive_json()
             original_session = state["observation_session"]
             clock.advance(1)
-            state = observe(producer, clock, state, source="camera")
+            state = observe(producer, clock, state, source="simulated")
             assert viewer.receive_json() == state
             close_and_wait(client, app, viewer, 1)
         assert current(client, app)["observation_session"] == original_session
-        assert current(client, app)["observation"]["source"] == "camera"
+        assert current(client, app)["observation"]["source"] == "simulated"
         clock.advance(1)
-        state = observe(producer, clock, state, source="camera")
+        state = observe(producer, clock, state, source="simulated")
         assert state["reminder"]["active"] is True
         trigger_ids = [e["id"] for e in state["events"] if e["kind"] == "reminder_triggered"]
         with client.websocket_connect("/ws") as reconnected:
@@ -406,7 +463,7 @@ def test_producer_disconnect_invalidates_input_and_broadcasts(rig):
         producer.receive_json()
         state = command(producer, "set_monitoring", enabled=True)
         viewer.receive_json()
-        state = observe(producer, clock, state, source="camera")
+        state = observe(producer, clock, state, source="simulated")
         viewer.receive_json()
         original_session = state["observation_session"]
         close_and_wait(client, app, producer, 1)
@@ -414,7 +471,7 @@ def test_producer_disconnect_invalidates_input_and_broadcasts(rig):
         assert state["display"] == "unavailable" and state["observation"]["source"] == "none"
         assert state["observation_session"] != original_session
         assert state["reminder"]["active"] is False
-        assert observe(viewer, clock, state, source="camera",
+        assert observe(viewer, clock, state, source="simulated",
                        session_id=original_session)["type"] == "error"
 
 
@@ -427,7 +484,7 @@ def test_rejected_payloads_are_private_and_debug_events_are_bounded(rig, caplog)
             ws.send_text(json.dumps({"type": "set_monitoring", "enabled": secret}))
             assert secret not in json.dumps(ws.receive_json())
         state = current(client, app)
-        assert state["revision"] == 0 and len(state["events"]) == 100
+        assert state["revision"] == 1 and len(state["events"]) == 100
         assert secret not in json.dumps(state) and secret not in caplog.text
         assert all(len(e["message"]) <= 300 for e in state["events"])
         assert all(e["at"].endswith("+00:00") for e in state["events"])

@@ -15,6 +15,10 @@ let attempts = 0, stopped = false, connected = false, protocolBlocked = false;
 let state = null, simulatedInput = null, clearedEventsThrough = 0;
 let audioContext = null, audioIssue = "", currentTone = null;
 const seenReminders = new Set();
+const camera = new CameraController($("camera-preview"), $("camera-status"), (message) => {
+  feedback(message);
+  if (connected && state?.input_source === "camera" && state.camera_session) send({type: "camera_failed"}, false);
+});
 
 function setText(id, text) {
   if ($(id).textContent !== text) $(id).textContent = text;
@@ -38,12 +42,21 @@ function seconds(value) {
 function validSnapshot(next) {
   const finite = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
   const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
-  return object(next) && next.protocol_version === 2 &&
+  const positive = (value) => finite(value) && value > 0;
+  const cameraSettings = object(next?.camera_settings) &&
+    ["width", "height", "fps", "jpeg_quality", "max_bytes", "timeout_seconds"].every((key) => positive(next.camera_settings[key])) &&
+    next.camera_settings.jpeg_quality <= 1;
+  return object(next) && next.protocol_version === 7 &&
     typeof next.instance_id === "string" && next.instance_id.length > 0 &&
     Number.isSafeInteger(next.revision) && next.revision >= 0 &&
     ["dev_controls", "powered_on", "monitoring_enabled", "muted"].every((key) => typeof next[key] === "boolean") &&
     Object.hasOwn(displayLabels, next.display) && Object.hasOwn(displayLabels, next.behavior_state) &&
     ["available", "unavailable"].includes(next.camera_status) &&
+    ["camera", "simulated"].includes(next.input_source) &&
+    ["paused", "starting", "available", "unavailable"].includes(next.camera_capture_status) &&
+    typeof next.camera_processor_ready === "boolean" && cameraSettings &&
+    (next.camera_session === null || (typeof next.camera_session === "string" && next.camera_session.length > 0 &&
+      next.powered_on && next.monitoring_enabled && next.input_source === "camera" && next.camera_processor_ready)) &&
     typeof next.observation_session === "string" && next.observation_session.length > 0 &&
     finite(next.absence_duration_seconds) && finite(next.cooldown_remaining_seconds) &&
     object(next.observation) && Object.hasOwn(presenceLabels, next.observation.presence) &&
@@ -58,16 +71,23 @@ function validSnapshot(next) {
 }
 
 function controls(isConnected) {
-  $("monitor").disabled = !isConnected || !state?.powered_on;
+  $("monitor").disabled = !isConnected || !state?.powered_on ||
+    (!state.monitoring_enabled && state.input_source === "camera" && !state.camera_processor_ready);
   $("power").disabled = !isConnected;
   $("sound").disabled = !isConnected;
   $("dismiss").disabled = !isConnected || !state?.reminder.active;
   $("audio-unlock").disabled = !isConnected;
-  const canSimulate = isConnected && state?.dev_controls && state.powered_on && state.monitoring_enabled;
+  const canSimulate = isConnected && state?.dev_controls && state.powered_on && state.monitoring_enabled && state.input_source === "simulated";
   document.querySelectorAll("[data-observation]").forEach((button) => { button.disabled = !canSimulate; });
   const canPreview = isConnected && state?.dev_controls && state.powered_on && !state.monitoring_enabled;
   document.querySelectorAll("[data-preview]").forEach((button) => { button.disabled = !canPreview; });
   $("clear-preview").disabled = !canPreview;
+  document.querySelectorAll("[data-source]").forEach((button) => {
+    button.disabled = !isConnected || !state?.powered_on || state.monitoring_enabled ||
+      (button.dataset.source === "simulated" && !state.dev_controls);
+  });
+  $("retry-camera").disabled = !isConnected || !state?.powered_on || !state.monitoring_enabled ||
+    state.input_source !== "camera" || !state.camera_processor_ready || state.camera_capture_status !== "unavailable";
 }
 
 function stopSimulation() {
@@ -80,6 +100,7 @@ function updateSimulationStatus() {
   let label;
   if (!connected) label = "Connect to the backend to simulate input.";
   else if (!state.dev_controls) label = "Simulated inputs are disabled by the backend.";
+  else if (state.input_source !== "simulated") label = "Select simulated input while monitoring is paused.";
   else if (!state.powered_on) label = "Wake Pomo to use simulated input.";
   else if (!state.monitoring_enabled) label = "Enable monitoring, then select an input.";
   else if (simulatedInput) label = `Sending simulated ${presenceLabels[simulatedInput].toLowerCase()} observations.`;
@@ -169,12 +190,87 @@ function renderEvents(events) {
   $("events").replaceChildren(...items);
 }
 
+function clearOverlay() {
+  const overlay = $("face-overlay");
+  const context = overlay.getContext?.("2d");
+  context?.clearRect(0, 0, overlay.width, overlay.height);
+}
+
+function stopCamera(message) {
+  camera.stop();
+  clearOverlay();
+  if (message) setText("camera-status", message);
+}
+
+function renderCameraDiagnostics(next) {
+  const raw = next.camera_observation;
+  const observation = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : null;
+  const statuses = {
+    paused: "Detection paused", unavailable: "Camera unavailable · reminders suspended",
+    awaiting_face: "Waiting for a visible face before monitoring absence",
+    confirming_face: "Confirming face presence", present: "Face visible",
+    tracking_loss: "Brief face tracking loss", possible_absence: "Possible absence", absence: "Face not detected",
+    distraction: "Possible absence", reminding: "Sustained face absence",
+    uncertain: "Input uncertain · reminders suspended", stale: "Input stale · reminders suspended"
+  };
+  let detectionStatus;
+  if (next.input_source !== "camera") detectionStatus = "Camera detection off · simulated input selected";
+  else if (!next.powered_on || !next.monitoring_enabled) detectionStatus = "Detection paused";
+  else detectionStatus = (Object.hasOwn(statuses, next.camera_tracking_status) ? statuses[next.camera_tracking_status] : null) ||
+      (next.camera_status === "unavailable" ? statuses.unavailable : "Waiting for observations");
+  setText("detection-status", detectionStatus);
+  const rawPresenceLabels = {present: "Present", not_detected: "Not detected", unknown: "Unknown"};
+  setText("face-presence", Object.hasOwn(rawPresenceLabels, observation?.presence) ? rawPresenceLabels[observation.presence] : "Unknown");
+  setText("head-direction", typeof next.head_direction === "string" ? next.head_direction.slice(0, 60) : "unknown");
+  const pose = observation?.head_pose;
+  setText("head-angles", pose && [pose.yaw, pose.pitch, pose.roll].every(Number.isFinite) ?
+    `Yaw ${pose.yaw.toFixed(0)}° / pitch ${pose.pitch.toFixed(0)}° / roll ${pose.roll.toFixed(0)}°` : "—");
+  const reasons = {usable: "Usable", no_face: "No face detected", low_light: "Low light",
+    overexposed: "Overexposed", low_detail_or_blur: "Low detail or blur", invalid_landmarks: "Uncertain landmarks"};
+  setText("image-quality", Object.hasOwn(reasons, observation?.reason) ? reasons[observation.reason] : "—");
+  setText("camera-armed", typeof next.camera_armed === "boolean" ? (next.camera_armed ? "Confirmed" : "Waiting for a visible face") : "—");
+  setText("camera-absence", Number.isFinite(next.camera_absence_duration_seconds) && next.camera_absence_duration_seconds >= 0 ? seconds(next.camera_absence_duration_seconds) : "—");
+  setText("frames-received", Number.isSafeInteger(next.frames_received) && next.frames_received >= 0 ? String(next.frames_received) : "0");
+  const scores = observation?.blendshapes || {};
+  const formatScore = (name) => `${name}: ${Number.isFinite(scores[name]) ? scores[name].toFixed(2) : "—"}`;
+  const eyes = observation?.eye_movement;
+  const formatEye = (name, eye) => `${name}: ${typeof eye?.direction === "string" ? eye.direction.slice(0, 30) : "unknown"}`;
+  const formatBlink = (name, eye) => `${name}: ${Number.isFinite(eye?.blink_score) ? eye.blink_score.toFixed(2) : "—"}`;
+  setText("eye-movement", [formatEye("eyeLeft", eyes?.eyeLeft), formatEye("eyeRight", eyes?.eyeRight),
+    formatBlink("eyeBlinkLeft", eyes?.eyeLeft), formatBlink("eyeBlinkRight", eyes?.eyeRight)].join(" · "));
+  setText("eye-vertical-signals", ["eyeLookUpLeft", "eyeLookDownLeft", "eyeLookUpRight", "eyeLookDownRight"].map(formatScore).join(" · "));
+  const formatOffset = (name, eye) => `${name}: ${Number.isFinite(eye?.vertical_offset) ? eye.vertical_offset.toFixed(3) : "—"}`;
+  setText("eye-vertical-offsets", [formatOffset("eyeLeft", eyes?.eyeLeft), formatOffset("eyeRight", eyes?.eyeRight)].join(" · "));
+  setText("mouth-movement", ["jawOpen", "mouthSmileLeft", "mouthSmileRight"].map(formatScore).join(" · "));
+
+  clearOverlay();
+  const box = observation?.face_box;
+  const frame = next.last_frame;
+  const overlay = $("face-overlay");
+  const context = overlay.getContext?.("2d");
+  const fresh = next.observation.source === "camera" && next.observation.age_seconds !== null &&
+    next.observation.age_seconds < next.settings.observation_timeout_seconds;
+  if (context && next.camera_session && next.input_source === "camera" && next.powered_on && next.monitoring_enabled &&
+      fresh && next.camera_status === "available" && observation?.presence === "present" &&
+      Array.isArray(box) && box.length === 4 && box.every((value) => Number.isFinite(value) && value >= 0 && value <= 1) &&
+      box[2] > box[0] && box[3] > box[1] && Number.isFinite(frame?.width) && frame.width > 0 &&
+      Number.isFinite(frame?.height) && frame.height > 0) {
+    const scale = Math.min(overlay.width / frame.width, overlay.height / frame.height);
+    const offsetX = (overlay.width - frame.width * scale) / 2;
+    const offsetY = (overlay.height - frame.height * scale) / 2;
+    context.strokeStyle = "#fff";
+    context.lineWidth = 2;
+    context.strokeRect(offsetX + box[0] * frame.width * scale, offsetY + box[1] * frame.height * scale,
+      (box[2] - box[0]) * frame.width * scale, (box[3] - box[1]) * frame.height * scale);
+  }
+}
+
 function render(next, initialSnapshot) {
   const previous = state;
   if (previous && previous.instance_id !== next.instance_id) clearedEventsThrough = 0;
   state = next;
-  if (!state.powered_on || !state.monitoring_enabled || !state.dev_controls) stopSimulation();
-  $("screen").dataset.display = state.display;
+  if (!state.powered_on || !state.monitoring_enabled || !state.dev_controls || state.input_source !== "simulated") stopSimulation();
+  if (!previous || previous.display !== state.display) $("screen").dataset.display = state.display;
   setText("state-title", displayLabels[state.display]);
   const previewing = state.display !== state.behavior_state;
   $("preview-status").hidden = !previewing;
@@ -189,7 +285,19 @@ function render(next, initialSnapshot) {
   setText("reminder-message", state.reminder.active ? state.reminder.message || "Take a moment to return when you’re ready." : "");
   setText("observation-current", presenceLabels[state.observation.presence]);
   setText("observation-source", sourceLabels[state.observation.source]);
-  setText("camera-status", state.camera_status === "available" ? "Available" : "Unavailable");
+  setText("input-status", state.camera_status === "available" ? "Available" : "Unavailable");
+  $("camera-panel").hidden = state.input_source !== "camera";
+  $("simulation-panel").hidden = state.input_source !== "simulated";
+  document.querySelectorAll("[data-source]").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.source === state.input_source));
+  });
+  setText("source-status", state.monitoring_enabled ? "Pause monitoring to change the input source." :
+    state.input_source === "camera" && !state.camera_processor_ready ? "Camera processor unavailable. Simulated input is available for development." :
+    !state.dev_controls ? "Camera input selected. Development simulation is disabled." : "Select a source, then enable monitoring.");
+  $("retry-camera").hidden = state.input_source !== "camera" || !state.powered_on || !state.monitoring_enabled ||
+    !state.camera_processor_ready || state.camera_capture_status !== "unavailable";
+  camera.update(state);
+  renderCameraDiagnostics(state);
   setText("absence-duration", seconds(state.absence_duration_seconds));
   setText("cooldown-status", seconds(state.cooldown_remaining_seconds));
   setText("observation-age", state.observation.age_seconds === null ? "—" : seconds(state.observation.age_seconds));
@@ -228,7 +336,7 @@ function send(command, clearFeedback = true) {
 }
 
 function submitSimulatedObservation(presence) {
-  if (!connected || !state?.dev_controls || !state.powered_on || !state.monitoring_enabled) return false;
+  if (!connected || !state?.dev_controls || !state.powered_on || !state.monitoring_enabled || state.input_source !== "simulated") return false;
   return send({
     type: "submit_observation",
     presence,
@@ -284,6 +392,7 @@ function connect() {
         connected = false;
         controls(false);
         stopSimulation();
+        stopCamera("Camera stopped · incompatible backend");
         stopTone();
         protocolBlocked = true;
         feedback("Backend protocol mismatch. Update the backend and refresh this page.");
@@ -316,6 +425,8 @@ function connect() {
     connected = false;
     controls(false);
     stopSimulation();
+    stopCamera("Camera stopped · backend disconnected");
+    setText("detection-status", "Disconnected · observations may be stale");
     stopTone();
     setText("connection", protocolBlocked ? "Incompatible" : "Disconnected");
     $("connection").dataset.connected = "false";
@@ -332,12 +443,18 @@ function connect() {
 $("monitor").onclick = () => {
   if (!state) return;
   stopSimulation();
+  if (state.monitoring_enabled) stopCamera("Camera paused");
   send({type: "set_monitoring", enabled: !state.monitoring_enabled});
 };
 $("power").onclick = () => {
   if (!state) return;
   stopSimulation();
+  stopCamera("Camera stopped");
   send({type: "set_power", enabled: !state.powered_on});
+};
+$("retry-camera").onclick = () => {
+  stopCamera("Retrying camera…");
+  send({type: "set_monitoring", enabled: true});
 };
 $("dismiss").onclick = () => {
   if (state?.reminder.active) send({type: "dismiss_reminder", reminder_id: state.reminder.id});
@@ -352,6 +469,14 @@ $("sound").onclick = async () => {
 $("audio-unlock").onclick = () => unlockAudio();
 document.querySelectorAll("[data-observation]").forEach((button) => {
   button.onclick = () => simulate(button.dataset.observation);
+});
+document.querySelectorAll("[data-source]").forEach((button) => {
+  button.onclick = () => {
+    if (!state || state.monitoring_enabled || !state.powered_on) return;
+    stopSimulation();
+    stopCamera("Camera paused");
+    send({type: "set_input_source", source: button.dataset.source});
+  };
 });
 document.querySelectorAll("[data-preview]").forEach((button) => {
   button.onclick = () => send({type: "preview_display", display: button.dataset.preview});
@@ -368,6 +493,7 @@ window.addEventListener("pagehide", () => {
   clearTimeout(retryTimer);
   clearTimeout(connectTimer);
   stopSimulation();
+  stopCamera("Camera stopped");
   stopTone();
   socket?.close();
 });
@@ -375,6 +501,12 @@ window.addEventListener("pageshow", (event) => {
   if (event.persisted) {
     stopped = false;
     connect();
+  }
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && camera.session) {
+    stopCamera("Camera stopped · tab hidden. Retry when you return.");
+    send({type: "camera_failed"}, false);
   }
 });
 connect();

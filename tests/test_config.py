@@ -2,7 +2,7 @@
 
 import pytest
 
-from backend.config import Settings
+from backend.config import CameraConfig, PerceptionConfig, Settings
 from backend.policy import PolicyConfig
 
 
@@ -78,3 +78,27 @@ def test_detection_durations_must_be_positive(name):
 def test_empty_bind_host_is_rejected(host):
     with pytest.raises(ValueError, match="POMO_HOST"):
         Settings.from_env({"POMO_HOST": host})
+
+
+def test_camera_and_reminder_settings_share_one_environment_mapping(monkeypatch):
+    monkeypatch.setenv("POMO_CAMERA_WIDTH", "1280")
+    settings = Settings.from_env({
+        "POMO_CAMERA_WIDTH": "800", "POMO_CAMERA_HEIGHT": "600",
+        "POMO_PERCEPTION_MIN_BLUR_VARIANCE": "7",
+        "POMO_ABSENCE_SECONDS": "8",
+        "POMO_RETURN_SECONDS": "0.75",
+        "POMO_TRACKING_LOSS_GRACE_SECONDS": "0.5",
+    })
+    assert settings.camera.width == 800 and settings.camera.height == 600
+    assert settings.perception.min_blur_variance == 7
+    assert settings.policy.absence_seconds == settings.behaviour.absence_seconds == 8
+    assert settings.behaviour.return_seconds == 0.75
+    assert Settings.from_env({}).camera.width == 640
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_nonfinite_camera_and_perception_configuration_is_rejected(value):
+    with pytest.raises(ValueError):
+        CameraConfig(timeout_seconds=value)
+    with pytest.raises(ValueError):
+        PerceptionConfig(min_blur_variance=value)

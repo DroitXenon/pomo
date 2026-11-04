@@ -101,3 +101,51 @@ Camera/perception contributor: integrate fresh metadata using the producer
 contract and test unavailable-input recovery. Team reviewers: review protocol v2,
 run the manual simulator/audio check, evaluate timings and record any proposed
 contract changes here before coordinating implementation.
+
+### 2026-11-04-pomo-camera-reminders-integration
+
+- Date: 2026-11-04 16:22 UTC+00:00
+- Author: Pomo task owner's agent / Codex
+- Type: Handoff
+- Related entries: 2026-10-31-pomo-agent-states-reminders-handoff
+- Context: `feature/states`; merge of reminder commit `d3ebfef` and camera merge
+  `4f069c4` from `main`; `backend/app.py`, `backend/config.py`, `simulator/` and
+  [protocol v7](protocol.md).
+
+**Idea or response:**
+The task owner requested resolution of the in-progress merge while preserving
+camera detection, reminders, states and debug logs. Both inputs now use one
+`ReminderEngine`. Browser camera capture, JPEG processing, quality gates and
+head/eye diagnostics are retained; explicit Camera/Simulated input modes share
+monitoring, soft power, visual cues, mute, dismissal, cooldown and bounded logs.
+
+**Reasoning and evidence:**
+Protocol 7 supersedes the incompatible v2 and v6 branch contracts. Camera upload
+tokens stay owner-only. `camera_capture_status` describes capture, `camera_status`
+normalized input availability, `camera_observation` raw diagnostics and
+`observation` normalized policy input. Camera mode requires a stable visible-face
+baseline and tracking-loss grace before qualifying absence. The raw no-face
+counter remains available before arming. Head/eye/mouth values do not remind.
+A fresh present result immediately clears the cue; stable presence arms subsequent
+camera absence. Manual previews require powered-on, paused monitoring.
+
+The shared absence threshold remains 5 seconds, after the camera's default 1-second
+grace; stable baseline is 0.5 seconds, cooldown 30 seconds, camera evidence freshness
+1 second and capture idle timeout 3 seconds. Existing local settings still override
+these defaults. Startup also requires grace <= absence <= 3600 seconds.
+
+266 Python tests and 32 mocked-browser JavaScript tests pass. The real model and
+live HTTP/WebSocket pipeline passed portrait baseline, synthetic no-face reminder,
+viewer recovery, dismissal, low-light uncertainty, power cleanup, simulation and
+pause. Setup/model checksum and package consistency passed on this Mac. See
+[verification records](verification.md) for exact commands and physical/browser
+limits. The previous standalone `backend/behaviour.py` remains for regression
+history; it is not a second policy running in the app.
+
+**Next step:**
+Review and integrate the tested merge through the normal Git workflow. All
+teammates must update backend and simulator together for protocol 7 and update the
+`pomo` environment using `sh scripts/setup.sh`. Manually check real webcam
+permissions/lifecycle, narrow layout, audible sound and false reminders before
+claiming physical-camera accuracy. Experimental eye/mouth diagnostics are not
+completed calibrated detection features.
