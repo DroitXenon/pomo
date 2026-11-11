@@ -53,13 +53,23 @@ function browser({audioSupport = true, audioResumeFails = false} = {}) {
   });
   const cameras = [];
   class Camera {
-    constructor(video, status, reportFailure) { this.video = video; this.status = status; this.reportFailure = reportFailure; this.stopCalls = 0; this.updates = []; this.session = null; cameras.push(this); }
+    constructor(video, status, reportFailure) { this.video = video; this.status = status; this.reportFailure = reportFailure; this.stopCalls = 0; this.updates = []; this.session = null; this.generation = 0; cameras.push(this); }
     update(next) {
       this.updates.push(next);
       if (next.input_source === "camera" && next.powered_on && next.monitoring_enabled && next.camera_processor_ready && next.camera_session) this.session = next.camera_session;
-      else this.stop();
+      else {
+        this.stop();
+        if (next.camera_capture_status === "unavailable" && this.failure) this.status.textContent = this.failure;
+      }
     }
-    stop() { this.stopCalls++; this.session = null; }
+    stop() { this.stopCalls++; this.session = null; this.generation++; }
+    fail(message, generation) {
+      if (generation !== this.generation) return;
+      this.stop();
+      this.failure = message;
+      this.status.textContent = message;
+      this.reportFailure(message);
+    }
   }
   let epoch = 1800000000000;
   let sequence = 0;

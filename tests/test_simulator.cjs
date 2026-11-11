@@ -241,3 +241,24 @@ test("legacy protocol 6 is rejected before camera permission is requested", () =
   assert.equal(b.elements.monitor.disabled, true);
   assert.equal(b.elements.connection.textContent, "Incompatible");
 });
+
+test('hiding a starting or active owner tab sends one failure and retains a copyable reason',()=>{
+  for(const captureStatus of ['starting','available']) {
+    const b=browser();
+    const socket=b.sockets[0];
+    socket.receive(snapshot({monitoring_enabled:true,camera_session:'owner-session',camera_capture_status:captureStatus}));
+    b.document.hidden=true;
+    b.listeners.visibilitychange();
+    b.listeners.visibilitychange();
+    assert.deepEqual(socket.sent,[{type:'camera_failed'}]);
+    const reason='Pomo tab hidden. Keep this tab visible and retry the camera.';
+    assert.equal(b.elements.feedback.textContent,reason);
+    assert.equal(b.elements['camera-status'].textContent,reason);
+    socket.receive(snapshot({revision:1,monitoring_enabled:true,display:'unavailable',behavior_state:'unavailable',camera_session:null,camera_capture_status:'unavailable'}));
+    assert.equal(b.elements.feedback.textContent,reason);
+    assert.equal(b.elements['camera-status'].textContent,reason);
+    assert.equal(b.elements.journal.children.filter(item=>item.textContent.includes(`Camera: ${reason}`)).length,1);
+    assert.equal(socket.sent.length,1);
+    b.listeners.pagehide();
+  }
+});

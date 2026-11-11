@@ -149,3 +149,101 @@ test('an upload rejection releases camera resources and reports one recoverable 
   assert.equal(failures.length,1);
   assert.match(status.textContent,/413/);
 });
+
+test('playback denial after camera permission is not reported as capture denial',async()=>{
+  const media=stream();
+  let captures=0,uploads=0;
+  const {camera,video,status,failures}=setup(async()=>{captures++; return media;},async()=>{uploads++;});
+  video.play=async()=>{throw {name:'NotAllowedError',message:'private native detail'};};
+  camera.update(state());
+  await flush();
+  assert.equal(captures,1);
+  assert.equal(uploads,0);
+  assert.equal(video.muted,true);
+  assert.equal(video.playsInline,true);
+  assert.match(status.textContent,/permission was granted.*playback was blocked/);
+  assert.doesNotMatch(status.textContent,/permission denied|private native detail/);
+  assert.equal(failures.length,1);
+  assert.equal(media.track.stopped,1);
+});
+
+test('stream attachment errors are identified before playback and upload',async()=>{
+  const media=stream();
+  let uploads=0;
+  const {camera,video,status}=setup(async()=>media,async()=>{uploads++;});
+  Object.defineProperty(video,'srcObject',{get:()=>null,set(value){if(value!==null)throw new Error('private attachment detail');}});
+  camera.update(state());
+  await flush();
+  assert.equal(uploads,0);
+  assert.equal(media.track.stopped,1);
+  assert.match(status.textContent,/could not attach the video stream/);
+  assert.doesNotMatch(status.textContent,/private attachment detail/);
+});
+
+test('playback completing after pause cannot restart encoding or upload',async()=>{
+  const media=stream();
+  let finishPlayback,uploads=0;
+  const {camera,video,status,failures}=setup(async()=>media,async()=>{uploads++;});
+  video.play=()=>new Promise(resolve=>{finishPlayback=resolve;});
+  camera.update(state());
+  await flush();
+  camera.update(state({monitoring_enabled:false,camera_session:null,camera_capture_status:'paused'}));
+  finishPlayback();
+  await flush();
+  assert.equal(uploads,0);
+  assert.equal(media.track.stopped,1);
+  assert.equal(failures.length,0);
+  assert.equal(video.srcObject,null);
+  assert.equal(status.textContent,'Camera paused');
+});
+
+test('missing canvas context and empty JPEG encoding have specific diagnostics',async()=>{
+  for(const failure of ['context','null-frame','empty-frame','drawing']) {
+    const media=stream();
+    let uploads=0;
+    const {camera,canvas,status,failures}=setup(async()=>media,async()=>{uploads++;});
+    if(failure==='context')canvas.getContext=()=>null;
+    if(failure==='null-frame')canvas.toBlob=callback=>callback(null);
+    if(failure==='empty-frame')canvas.toBlob=callback=>callback({size:0});
+    if(failure==='drawing')canvas.getContext=()=>({drawImage(){throw new Error('private encoder detail');}});
+    camera.update(state());
+    await flush();
+    assert.equal(uploads,0);
+    assert.equal(media.track.stopped,1);
+    assert.equal(failures.length,1);
+    assert.match(status.textContent,failure==='context'?/frame encoding is unavailable/:failure==='drawing'?/JPEG frame encoding failed/:/JPEG encoding returned no frame/);
+    assert.doesNotMatch(status.textContent,/permission denied|private encoder detail/);
+  }
+});
+
+test('a rejected fetch is reported as an upload failure without exposing native details',async()=>{
+  const media=stream();
+  const {camera,status,failures}=setup(async()=>media,async()=>{throw new Error('private URL or device detail');});
+  camera.update(state());
+  await flush();
+  assert.match(status.textContent,/Camera frame upload failed/);
+  assert.doesNotMatch(status.textContent,/permission denied|private URL or device detail/);
+  assert.equal(failures.length,1);
+  assert.equal(media.track.stopped,1);
+});
+
+test('hidden-tab reason survives unavailable snapshots during permission and active capture',async()=>{
+  const reason='Pomo tab hidden. Keep this tab visible and retry the camera.';
+  for(const pendingPermission of [true,false]) {
+    const media=stream();
+    let grant;
+    const {camera,status,failures}=setup(pendingPermission?()=>new Promise(resolve=>{grant=resolve;}):async()=>media,async(_url,options)=>new Promise((_,reject)=>options.signal.addEventListener('abort',()=>reject(new Error('aborted')))));
+    camera.update(state());
+    await flush();
+    const generation=camera.generation;
+    camera.fail(reason,generation);
+    camera.fail(reason,generation);
+    camera.update(state({camera_session:null,camera_capture_status:'unavailable'}));
+    if(pendingPermission)grant(media);
+    await flush();
+    assert.equal(failures.length,1);
+    assert.equal(status.textContent,reason);
+    assert.equal(media.track.stopped,1);
+    assert.equal(camera.session,null);
+  }
+});

@@ -240,3 +240,35 @@ Physical camera permissions/accuracy, rendered desktop/narrow browser appearance
 actual audible output and new Windows/Linux installs remain unverified in this
 integration run. Native model warnings and the existing test adapter warning did
 not fail the checks.
+
+## Camera startup diagnostics — 4 November 2026
+
+A user reported successful HTTP assets/WebSocket connections followed by
+`camera_started` and `camera_failed`, without a frame upload. A read-only request
+to the running local `/health` endpoint confirmed protocol 7 and
+`camera_processor_ready: true`. This establishes model readiness, not webcam
+access or the user's exact browser failure.
+
+A Node reproduction showed successful camera permission followed by a rejected
+`video.play()` incorrectly reporting permission denial. Hidden-tab interruption
+also lost its specific local reason after the next unavailable snapshot.
+Capture, attachment, playback, encoding and upload now have separate messages;
+the preview is explicitly muted/inline, hidden-tab reasons persist, and bounded
+failure text appears in feedback and the connection journal. WebSocket schema and
+backend behavior are unchanged. Static asset versions are camera v4/app v16.
+
+- `node --test tests/test_simulator.js tests/test_simulator.cjs tests/test_camera_client.cjs`:
+  **39 passed**. Added regression coverage for playback denial after successful
+  capture, attachment failure, late playback cancellation, missing canvas, empty
+  or failed JPEG encoding, rejected fetch and hidden-tab interruption during
+  permission and active capture. Cancellation still releases resources and reports
+  one failure without logging native error details, images or session tokens.
+- `node --check simulator/camera.js`, `node --check simulator/app.js` and
+  `git diff --check`: passed.
+- Backend code and protocol were unchanged, so Python tests were not repeated for
+  this browser-only correction. The preceding integrated backend run remains
+  recorded separately.
+
+The actual user's camera access, preview, browser/OS permissions and playback
+remain unverified pending the exact on-page error and a manual retry. This change
+improves diagnosis; it does not establish that the no-video report is resolved.
