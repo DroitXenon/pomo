@@ -149,3 +149,32 @@ teammates must update backend and simulator together for protocol 7 and update t
 permissions/lifecycle, narrow layout, audible sound and false reminders before
 claiming physical-camera accuracy. Experimental eye/mouth diagnostics are not
 completed calibrated detection features.
+
+### 2026-11-04-pomo-camera-startup-diagnostics
+
+- Date: 2026-11-04 17:09 UTC+00:00
+- Author: Pomo task owner's agent / Codex
+- Type: Reply
+- Related entries: 2026-11-04-pomo-camera-reminders-integration
+- Context: No-video report on protocol 7; `simulator/camera.js`, `simulator/app.js`,
+  camera/browser tests and README troubleshooting.
+
+**Idea or response:**
+The running backend reports ready camera processing, while the reported browser
+attempts fail before a JPEG request reaches the server. That alone does not prove
+permission denial: capture, playback, frame preparation and tab hiding can fail
+before upload. The user's browser/address/exact on-page reason were requested.
+
+**Reasoning and evidence:**
+A mock reproduction confirmed that playback rejection was mislabelled camera
+permission denial. Capture/playback/encoding/upload now have distinct bounded
+messages; hidden-tab interruptions keep their reason after unavailable snapshots.
+Camera failure text is copied to feedback and the connection journal without
+images, tokens or arbitrary native-error details. All 39 Node checks and both
+production JavaScript syntax checks pass; backend/protocol are unchanged.
+
+**Next step:**
+Reload the updated camera v4/app v16 client, keep the owner tab visible, check
+browser and OS camera settings and retry. Obtain the exact on-page failure before
+claiming the physical-camera issue is fixed. Preserve the other contributor's
+concurrent `a705dba` commit; remaining test/diagnostic edits are separate local work.

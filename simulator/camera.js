@@ -120,7 +120,7 @@ class CameraController {
         context.drawImage(this.video, 0, 0, canvas.width, canvas.height);
         const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", settings.jpeg_quality));
         if (generation !== this.generation) return;
-        if (!blob) {
+        if (!blob || !Number.isFinite(blob.size) || blob.size <= 0) {
           this.fail("Camera preview started, but JPEG encoding returned no frame. Refresh the page and retry.", generation);
           return;
         }
