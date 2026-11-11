@@ -16,12 +16,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, TypeAdapter, ValidationError
 
 from backend.config import BehaviourConfig, CameraConfig, PerceptionConfig
-from backend.observations import Observation
+from backend.observations import Observation, Presence
 from backend.policy import PolicyConfig, ReminderEngine
 
 LOG = logging.getLogger("pomo")
-PROTOCOL_VERSION = 7
-Display = Literal["ready", "shutdown", "distraction", "reminding", "unavailable"]
+PROTOCOL_VERSION = 9
+Display = Literal["happy", "idle", "sad", "surprised", "bored"]
 
 
 class StrictCommand(BaseModel):
@@ -68,7 +68,7 @@ class ClearPreview(StrictCommand):
 
 class SubmitObservation(StrictCommand):
     type: Literal["submit_observation"]
-    presence: Literal["present", "absent", "unknown", "unavailable"]
+    presence: Presence
     source: Literal["simulated", "camera"]
     observed_at: Annotated[float, Field(strict=True, allow_inf_nan=False)]
     session_id: Annotated[str, Field(min_length=1, max_length=100)]
@@ -151,10 +151,15 @@ class Runtime:
         self.engine.invalidate_observations(reason)
 
     def snapshot(self, peer=None):
+        engine_snapshot = self.engine.snapshot()
+        # Presence has one policy meaning in both fields, including without a
+        # camera frame. Retain detector metadata only when a frame exists.
+        camera_observation = dict(self.camera_observation or {"reason": "no_camera_data"})
+        camera_observation["presence"] = engine_snapshot["observation"]["presence"]
         return {
             "type": "state", "protocol_version": PROTOCOL_VERSION,
             "instance_id": self.instance_id, "revision": self.revision,
-            "dev_controls": self.dev_controls, **self.engine.snapshot(),
+            "dev_controls": self.dev_controls, **engine_snapshot,
             "input_source": self.input_source,
             "camera_processor_ready": self.worker_ready,
             "camera_capture_status": self.camera_capture_status,
@@ -162,7 +167,7 @@ class Runtime:
             "camera_session": (self.camera_session if peer is self.camera_owner else None),
             "frames_received": self.frames_received,
             "last_frame": self.last_frame,
-            "camera_observation": self.camera_observation,
+            "camera_observation": camera_observation,
             "head_direction": self.head_direction,
             "camera_armed": self.camera_armed,
             "camera_tracking_status": self.camera_tracking_status,
@@ -391,11 +396,14 @@ class Runtime:
                     >= self.behaviour_config.observation_max_age_seconds)):
             self._reset_tracking()
         self._last_camera_observed = at
-        if observation.presence == "unknown":
+        if observation.presence in ("uncertain", "unavailable"):
             self._reset_tracking()
             self._last_camera_observed = at
-            self.camera_tracking_status = "uncertain"
-            return "unknown"
+            self.camera_tracking_status = (
+                "uncertain" if observation.presence == "uncertain"
+                else "stale" if observation.reason == "stale" else "unavailable"
+            )
+            return observation.presence
         if observation.presence == "present":
             self._lost_since = None
             if self._present_since is None:
@@ -412,10 +420,10 @@ class Runtime:
                 "tracking_loss" if at - self._lost_since < self.behaviour_config.tracking_loss_grace_seconds
                 else "possible_absence"
             )
-            return "unknown"
+            return "uncertain"
         if at - self._lost_since < self.behaviour_config.tracking_loss_grace_seconds:
             self.camera_tracking_status = "tracking_loss"
-            return "unknown"
+            return "uncertain"
         self.camera_tracking_status = "absence"
         return "absent"
 
@@ -471,16 +479,20 @@ class Runtime:
                 if (token != self.camera_session or observation_session != self.engine.observation_session
                         or now - received >= self.camera_config.timeout_seconds):
                     raise HTTPException(409, "Frame expired during processing")
-                raw = result.get("observation", {"presence": "unknown", "reason": "missing_result"})
+                raw = result.get("observation", {"presence": "unavailable", "reason": "missing_result"})
                 if now - received >= self.behaviour_config.observation_max_age_seconds:
-                    raw = {"presence": "unknown", "reason": "stale"}
+                    raw = {"presence": "unavailable", "reason": "stale"}
                 observation = Observation(observed_at=received, processed_at=now, **raw)
                 tracking = (self.camera_armed, self.camera_tracking_status,
                             self._present_since, self._lost_since, self._last_camera_observed,
                             self.head.direction)
                 try:
                     presence = self._normalized_presence(observation, now)
-                    self.engine.observe(presence, "camera", received_wall, observation_session)
+                    self.engine.observe(
+                        presence, "camera", received_wall, observation_session,
+                        transient_loss=(self.camera_armed and
+                                        self.camera_tracking_status == "tracking_loss"),
+                    )
                 except ValueError as error:
                     # Validation rejects duplicates/expired input before policy mutation.
                     # Keep the perception adapter equally atomic on that rejected frame.
@@ -493,6 +505,7 @@ class Runtime:
                 self.frames_received += 1
                 self.last_frame = {"width": result["width"], "height": result["height"], "sequence": sequence}
                 self.camera_observation = observation.model_dump()
+                self.camera_observation["presence"] = presence
                 self.head_direction = self.head.classify(
                     observation.head_pose if observation.presence == "present" else None,
                 )

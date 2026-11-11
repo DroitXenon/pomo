@@ -8,9 +8,10 @@ import time
 from typing import Callable
 from uuid import uuid4
 
+from .observations import PRESENCES
 
-DISPLAYS = frozenset({"ready", "shutdown", "distraction", "reminding", "unavailable"})
-PRESENCES = frozenset({"present", "absent", "unknown", "unavailable"})
+
+DISPLAYS = frozenset({"happy", "idle", "sad", "surprised", "bored"})
 SOURCES = frozenset({"simulated", "camera"})
 REMINDER_MESSAGE = "Ready to return to your study session?"
 
@@ -50,11 +51,12 @@ class ReminderEngine:
         self.powered_on = True
         self.monitoring_enabled = False
         self.muted = self._boolean(initially_muted, "initially_muted")
-        self.behavior_state = "ready"
+        self.behavior_state = "happy"
         self._preview = None
         self.camera_status = "unavailable"
         self.observation_session = uuid4().hex
-        self._presence = "unknown"
+        self._presence = "unavailable"
+        self._transient_loss = False
         self._source = "none"
         self._observed_at = None
         self._received_at = None
@@ -101,7 +103,8 @@ class ReminderEngine:
             self.record("reminder_cleared", reason)
 
     def _reset_observations(self):
-        self._presence = "unknown"
+        self._presence = "unavailable"
+        self._transient_loss = False
         self._source = "none"
         self._observed_at = None
         self._received_at = None
@@ -112,8 +115,8 @@ class ReminderEngine:
 
     def _resting_state(self):
         if not self.powered_on:
-            return "shutdown"
-        return "unavailable" if self.monitoring_enabled else "ready"
+            return "idle"
+        return "bored" if self.monitoring_enabled else "happy"
 
     def invalidate_observations(self, reason: str, level: str = "warning"):
         self._clear_reminder(reason)
@@ -175,9 +178,12 @@ class ReminderEngine:
         self.record("display_preview", "Display preview cleared")
         return True
 
-    def observe(self, presence: str, source: str, observed_at: float, session_id: str):
+    def observe(self, presence: str, source: str, observed_at: float, session_id: str,
+                *, transient_loss: bool = False):
         if presence not in PRESENCES or source not in SOURCES:
             raise ValueError("Unknown observation presence or source")
+        if type(transient_loss) is not bool or (transient_loss and presence != "uncertain"):
+            raise ValueError("Transient loss requires an uncertain observation")
         if not self.powered_on or not self.monitoring_enabled:
             raise ValueError("Observations require power on and monitoring enabled")
         if session_id != self.observation_session:
@@ -196,7 +202,8 @@ class ReminderEngine:
 
         previous_presence, previous_source = self._presence, self._source
         previous_camera = self.camera_status
-        self._presence = "unknown" if presence == "unavailable" else presence
+        self._presence = presence
+        self._transient_loss = transient_loss
         self._source = source
         self._observed_at = float(observed_at)
         self._received_at = now
@@ -220,21 +227,25 @@ class ReminderEngine:
     def _evaluate(self, now):
         if not self.powered_on or not self.monitoring_enabled:
             return self._transition(self._resting_state(), "Monitoring inactive")
-        if self.camera_status != "available" or self._presence == "unknown":
-            return self._transition("unavailable", "Detection input unavailable or uncertain")
+        if self.camera_status != "available":
+            return self._transition("bored", "Detection input unavailable or uncertain")
+        if self._presence == "uncertain":
+            if self._transient_loss:
+                return self._transition("happy", "Brief tracking loss within grace period")
+            return self._transition("bored", "Detection input unavailable or uncertain")
         if self._presence == "present":
-            return self._transition("ready", "User present")
+            return self._transition("happy", "User present")
         if self._reminder_active:
-            return self._transition("reminding", "Reminder active")
+            return self._transition("surprised", "Reminder active")
         duration = now - self._absence_started_at
         if duration >= self.config.absence_seconds and now >= self._cooldown_until:
             self._reminder_id += 1
             self._reminder_active = True
             self._cooldown_until = now + self.config.cooldown_seconds
             self.record("reminder_triggered", f"Reminder {self._reminder_id} triggered after sustained absence")
-            self._transition("reminding", "Sustained absence threshold reached")
+            self._transition("surprised", "Sustained absence threshold reached")
             return True
-        return self._transition("distraction", "Absence observed")
+        return self._transition("sad", "Absence observed")
 
     def dismiss(self, reminder_id: int):
         """Clear the active cue and guarantee a full quiet period after dismissal."""
@@ -247,7 +258,7 @@ class ReminderEngine:
         self.record("reminder_dismissed", f"Reminder {reminder_id} dismissed")
         # Dismissing a long-running cue must not let an already-expired cooldown
         # cause a new cue on the next tick. Returning/pause also retain cooldown.
-        self._transition("distraction", "Reminder dismissed")
+        self._transition("sad", "Reminder dismissed")
         return True
 
     def tick(self):

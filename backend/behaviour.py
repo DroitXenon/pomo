@@ -36,7 +36,9 @@ class Behaviour:
                 at - self.last_observed_at > self.config.observation_max_age_seconds):
             self.uncertain('stale')
         self.last_observed_at = at
-        if observation.presence == 'unknown':
+        if observation.presence == 'unavailable':
+            self.uncertain('unavailable')
+        elif observation.presence == 'uncertain':
             self.uncertain()
         elif observation.presence == 'present':
             self.absence_since = None

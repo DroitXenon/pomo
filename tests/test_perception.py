@@ -52,7 +52,7 @@ def test_poor_quality_is_unknown_without_running_inference(level, reason):
     detector = object.__new__(FacePerception)
     detector.config = PerceptionConfig(min_blur_variance=15)
     result = detector.analyse(np.full((48, 64, 3), level, dtype=np.uint8))
-    assert result['presence'] == 'unknown' and result['reason'] == reason
+    assert result['presence'] == 'uncertain' and result['reason'] == reason
 
 
 def test_model_output_conversion_keeps_expression_scores_separate_from_presence():
@@ -67,7 +67,7 @@ def test_model_output_conversion_keeps_expression_scores_separate_from_presence(
     assert output['face_box'] == (0.2, 0.1, 0.8, 0.9)
     assert output['head_pose']['yaw'] == pytest.approx(0)
     result.face_landmarks = []
-    assert FacePerception.observation_from_result(result, {})['presence'] == 'not_detected'
+    assert FacePerception.observation_from_result(result, {})['presence'] == 'absent'
 
 
 def test_observation_rejects_nonfinite_values_and_invalid_presence():
@@ -101,9 +101,9 @@ def test_default_blur_threshold_accepts_moderate_detail_but_rejects_flat_frames(
     result = detector.analyse(rgb)
     assert len(calls) == 1
     assert 5 <= result['blur_variance'] < 15
-    assert result['presence'] == 'not_detected'
+    assert result['presence'] == 'absent'
     assert result['reason'] == 'no_face'
     rejected = detector.analyse(np.full((48,64,3),128,dtype=np.uint8))
     assert len(calls) == 1
-    assert rejected['presence'] == 'unknown'
+    assert rejected['presence'] == 'uncertain'
     assert rejected['reason'] == 'low_detail_or_blur'

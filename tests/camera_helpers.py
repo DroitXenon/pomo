@@ -7,7 +7,7 @@ class DecodeProcessor(FrameProcessor):
         pass
 
     def analyse(self, rgb):
-        return {'presence': 'unknown', 'reason': 'test_decoder'}
+        return {'presence': 'uncertain', 'reason': 'test_decoder'}
 
     def close(self):
         pass

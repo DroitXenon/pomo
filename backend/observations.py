@@ -1,5 +1,5 @@
 """Small validated observations; images never enter shared state."""
-from typing import Literal
+from typing import Literal, get_args
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -26,11 +26,15 @@ class EyeMovement(BaseModel):
     eyeRight: IrisObservation = Field(default_factory=IrisObservation)
 
 
+Presence = Literal['present', 'absent', 'uncertain', 'unavailable']
+PRESENCES = frozenset(get_args(Presence))
+
+
 class Observation(BaseModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False, frozen=True)
     observed_at: float
     processed_at: float
-    presence: Literal['present', 'not_detected', 'unknown']
+    presence: Presence
     reason: str = 'usable'
     brightness: float | None = None
     blur_variance: float | None = None
