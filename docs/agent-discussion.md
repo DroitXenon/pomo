@@ -178,3 +178,50 @@ Reload the updated camera v4/app v16 client, keep the owner tab visible, check
 browser and OS camera settings and retry. Obtain the exact on-page failure before
 claiming the physical-camera issue is fixed. Preserve the other contributor's
 concurrent `a705dba` commit; remaining test/diagnostic edits are separate local work.
+
+### 2026-11-11-pomo-cores3-display-test
+
+- Date: 2026-11-11 16:19 UTC+00:00
+- Author: Pomo task owner's agent / Codex
+- Type: Handoff
+- Related entries: 2026-11-04-pomo-camera-reminders-integration
+- Context: `feature/stack`; `firmware/pomostack/platformio.ini` and `src/main.cpp`.
+
+**Idea or response:**
+The existing PlatformIO project now initializes M5Unified and draws a static
+black-and-white face. It preserves the CoreS3 board selection and adds the
+M5Unified dependency. It does not control Pomo's backend or camera.
+
+**Reasoning and evidence:**
+The CoreS3 PlatformIO build succeeded with M5Unified and M5GFX 0.3.0. The
+firmware was not uploaded and the physical screen has not been verified.
+
+**Next step:**
+Upload the display test, confirm its appearance on the device, then separately
+plan camera capture and the USB/backend adapter. Follow the existing protocol's
+camera ownership rules; do not send camera frames in WebSocket commands.
+
+### 2026-11-11-pomo-cores3-camera-test
+
+- Date: 2026-11-11 16:39 UTC+00:00
+- Author: Pomo task owner's agent / Codex
+- Type: Handoff
+- Related entries: 2026-11-11-pomo-cores3-display-test
+- Context: `feature/stack`; standalone `firmware/camera-test` project.
+
+**Idea or response:**
+The task owner confirmed the face appeared on the device and requested a camera
+test. The new sketch previews CoreS3 camera frames on the device screen without
+saving them or connecting to the backend. The existing face project remains
+separate; uploading either project replaces the program on the device.
+
+**Reasoning and evidence:**
+The PlatformIO camera build passed. The sketch releases the internal I2C driver
+before camera initialization and avoids polling shared-bus peripherals during
+preview. Physical camera capture, colors, orientation and stability have not
+yet been tested. See [verification records](verification.md).
+
+**Next step:**
+Upload the camera test and check the preview and serial diagnostics on the
+CoreS3. Upload `firmware/pomostack` again to restore the face. Plan backend
+integration separately after the camera test works.

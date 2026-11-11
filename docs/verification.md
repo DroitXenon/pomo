@@ -272,3 +272,23 @@ backend behavior are unchanged. Static asset versions are camera v4/app v16.
 The actual user's camera access, preview, browser/OS permissions and playback
 remain unverified pending the exact on-page error and a manual retry. This change
 improves diagnosis; it does not establish that the no-video report is resolved.
+
+## CoreS3 static display build — 11 November 2026
+
+The standalone `firmware/pomostack` PlatformIO sketch initializes M5Unified and
+renders a static black-and-white face. `pio run -d firmware/pomostack` succeeded
+on macOS with PlatformIO Core 6.2.0, Espressif32 6.9.0, M5Unified 0.3.0 and
+M5GFX 0.3.0. No upload was performed. Physical display rendering and USB
+communication remain unverified; camera capture and the backend adapter are not
+implemented by this sketch.
+
+## CoreS3 standalone camera preview — 11 November 2026
+
+The user subsequently confirmed the static face appeared on the CoreS3. A
+separate `firmware/camera-test` project now builds a local camera preview.
+
+- `/Users/droitxenon/.platformio/penv/bin/pio run -d firmware/camera-test`:
+  passed on macOS with Espressif32 6.9.0, M5Unified 0.3.0 and M5GFX 0.3.0.
+- This camera sketch was not uploaded or tested on physical hardware. Camera
+  capture, frame colors, orientation and stability remain to be verified on the
+  device. It does not record frames or connect to the Pomo backend.

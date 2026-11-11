@@ -89,8 +89,9 @@ access or a usable model. Then enable monitoring and choose a synthetic observat
 The source selector is a development control; production-style operation uses
 camera input. [Protocol v7](docs/protocol.md) defines both paths. The previous
 standalone `backend/behaviour.py` remains for historical regression tests; the live
-application has one reminder policy in `backend/policy.py`. Physical firmware
-remains unimplemented.
+application has one reminder policy in `backend/policy.py`. Standalone CoreS3
+display and camera-preview tests live in `firmware/`; the physical backend
+adapter and camera integration remain unimplemented.
 
 ## Runtime and Dependencies
 
@@ -351,7 +352,9 @@ simulator/
   camera.js           Browser permission/capture, preview and sequential uploads
   style.css           Responsive monochrome interface
 firmware/
-  README.md           Future hardware integration notes
+  README.md           Hardware integration and display-test notes
+  pomostack/          Standalone PlatformIO CoreS3 display test
+  camera-test/        Standalone PlatformIO CoreS3 camera preview
 docs/
   protocol.md         Current WebSocket message contract
   stack.md            Technology decisions
