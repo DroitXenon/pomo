@@ -98,7 +98,7 @@ def close_and_wait(client, app, ws, expected_clients):
 def test_health_static_and_protocol_defaults(rig):
     client, _, _ = rig
     assert client.get("/health").json() == {
-        "status": "ok", "phase": 2, "protocol_version": 7, "camera_processor_ready": True,
+        "status": "ok", "phase": 2, "protocol_version": 9, "camera_processor_ready": True,
     }
     assert "Pomo" in client.get("/").text
     assert client.get("/app.js").status_code == 200
@@ -106,13 +106,13 @@ def test_health_static_and_protocol_defaults(rig):
     with client.websocket_connect("/ws") as ws:
         state = ws.receive_json()
         assert state["type"] == "state"
-        assert state["protocol_version"] == 7
+        assert state["protocol_version"] == 9
         assert state["revision"] == 1
         assert state["instance_id"] and state["observation_session"]
         assert state["powered_on"] is True
         assert state["monitoring_enabled"] is False
         assert state["muted"] is True
-        assert state["display"] == state["behavior_state"] == "ready"
+        assert state["display"] == state["behavior_state"] == "bored"
         assert state["reminder"] == {"active": False, "id": 0, "message": None}
 
 
@@ -123,10 +123,10 @@ def test_commands_broadcast_identical_snapshots_to_all_clients(rig):
         b.receive_json()
         state = command(a, "set_monitoring", enabled=True)
         assert state == b.receive_json()
-        assert state["revision"] == 2 and state["display"] == "unavailable"
+        assert state["revision"] == 2 and state["display"] == "bored"
         state = observe(a, clock, state, "present", "simulated")
         assert state == b.receive_json()
-        assert state["revision"] == 3 and state["display"] == "ready"
+        assert state["revision"] == 3 and state["display"] == "happy"
         state = command(b, "set_muted", muted=False)
         assert state == a.receive_json()
         assert state["revision"] == 4 and state["muted"] is False
@@ -165,23 +165,23 @@ def test_camera_metadata_cannot_bypass_selected_camera_frame_pipeline(rig):
         assert without_events(current(client, app)) == without_events(before)
 
 
-@pytest.mark.parametrize("display", ["ready", "shutdown", "distraction", "reminding", "unavailable"])
+@pytest.mark.parametrize("display", ["happy", "idle", "sad", "surprised", "bored"])
 def test_previews_are_separate_from_policy_and_real_reminders(rig, display):
     client, _, _ = rig
     with client.websocket_connect("/ws") as ws:
         ws.receive_json()
         state = command(ws, "preview_display", display=display)
         assert state["display"] == display
-        assert state["behavior_state"] == "ready" and state["powered_on"] is True
+        assert state["behavior_state"] == "bored" and state["powered_on"] is True
         assert state["preview_active"] is True and state["reminder"]["id"] == 0
         assert not any(e["kind"] == "reminder_triggered" for e in state["events"])
         state = command(ws, "clear_preview")
-        assert state["display"] == "ready" and state["preview_active"] is False
+        assert state["display"] == "bored" and state["preview_active"] is False
         state = command(ws, "set_monitoring", enabled=True)
         revision = state["revision"]
-        assert command(ws, "preview_display", display="ready")["type"] == "error"
+        assert command(ws, "preview_display", display="happy")["type"] == "error"
         state = command(ws, "set_muted", muted=False)
-        assert state["revision"] == revision + 1 and state["display"] == "unavailable"
+        assert state["revision"] == revision + 1 and state["display"] == "bored"
 
 
 @pytest.mark.parametrize("payload", [
@@ -267,7 +267,7 @@ def test_elapsed_tick_triggers_once_and_dismissal_requires_current_id(rig):
         clock.advance(0.001)
         tick(client, app)
         state = ws.receive_json()
-        assert state["display"] == "reminding" and state["reminder"]["id"] == 1
+        assert state["display"] == "surprised" and state["reminder"]["id"] == 1
         for _ in range(11):
             clock.advance(1)
             state = observe(ws, clock, state)
@@ -277,7 +277,7 @@ def test_elapsed_tick_triggers_once_and_dismissal_requires_current_id(rig):
         assert command(ws, "dismiss_reminder", reminder_id=2)["type"] == "error"
         assert without_events(current(client, app)) == without_events(before)
         state = command(ws, "dismiss_reminder", reminder_id=1)
-        assert state["display"] == "distraction" and state["reminder"]["active"] is False
+        assert state["display"] == "sad" and state["reminder"]["active"] is False
         assert state["cooldown_remaining_seconds"] == 10
         for _ in range(10):
             clock.advance(1)
@@ -297,22 +297,22 @@ def test_cooldown_survives_return_pause_and_unavailable_input(rig):
         assert state["cooldown_remaining_seconds"] == 10
         clock.advance(0.1)
         state = observe(ws, clock, state, "present")
-        assert state["display"] == "ready"
+        assert state["display"] == "happy"
         assert state["cooldown_remaining_seconds"] == pytest.approx(9.9)
         state = command(ws, "set_monitoring", enabled=False)
-        assert state["display"] == "ready"
+        assert state["display"] == "bored"
         assert state["cooldown_remaining_seconds"] == pytest.approx(9.9)
         state = command(ws, "set_monitoring", enabled=True)
         clock.advance(0.1)
         state = observe(ws, clock, state, "unavailable")
-        assert state["display"] == "unavailable"
+        assert state["display"] == "bored"
         assert state["cooldown_remaining_seconds"] == pytest.approx(9.8)
         clock.advance(0.1)
         state = observe(ws, clock, state)
         for _ in range(3):
             clock.advance(1)
             state = observe(ws, clock, state)
-        assert state["display"] == "distraction" and state["reminder"]["id"] == 1
+        assert state["display"] == "sad" and state["reminder"]["id"] == 1
 
 
 def test_expiry_rotates_session_once_and_rejects_buffered_observations(rig):
@@ -326,7 +326,7 @@ def test_expiry_rotates_session_once_and_rejects_buffered_observations(rig):
         tick(client, app)
         state = ws.receive_json()
         assert state["observation_session"] != old_session
-        assert state["display"] == "unavailable" and state["absence_duration_seconds"] == 0
+        assert state["display"] == "bored" and state["absence_duration_seconds"] == 0
         assert state["observation"]["source"] == "none"
         before = current(client, app)
         tick(client, app)
@@ -354,11 +354,11 @@ def test_frame_arriving_after_expiry_cannot_beat_the_timer_with_an_old_session(r
         tick(client, app)
         state = ws.receive_json()
         assert state["observation_session"] != old_session
-        assert state["display"] == "unavailable"
+        assert state["display"] == "bored"
         assert state["observation"]["source"] == "none"
         assert state["reminder"]["active"] is False
         state = observe(ws, clock, state, source="simulated")
-        assert state["display"] == "distraction"
+        assert state["display"] == "sad"
         assert state["absence_duration_seconds"] == 0
         assert state["reminder"]["active"] is False
 
@@ -370,7 +370,7 @@ def test_pause_and_soft_power_cycle_require_fresh_session_and_reset_inputs(rig):
         state = trigger_reminder(ws, clock)
         original_session = state["observation_session"]
         state = command(ws, "set_monitoring", enabled=False)
-        assert state["display"] == "ready" and state["reminder"]["active"] is False
+        assert state["display"] == "bored" and state["reminder"]["active"] is False
         assert state["observation_session"] != original_session
         state = command(ws, "set_monitoring", enabled=True)
         assert observe(ws, clock, state, session_id=original_session)["type"] == "error"
@@ -378,16 +378,16 @@ def test_pause_and_soft_power_cycle_require_fresh_session_and_reset_inputs(rig):
         active_session = state["observation_session"]
         state = command(ws, "set_power", enabled=False)
         assert state["powered_on"] is False and state["monitoring_enabled"] is False
-        assert state["display"] == "shutdown" and state["reminder"]["active"] is False
+        assert state["display"] == "idle" and state["reminder"]["active"] is False
         assert state["observation"]["source"] == "none"
         assert state["observation_session"] != active_session
         before = current(client, app)
         for kind, fields in (("set_monitoring", {"enabled": True}),
-                             ("preview_display", {"display": "ready"})):
+                             ("preview_display", {"display": "happy"})):
             assert command(ws, kind, **fields)["type"] == "error"
             assert without_events(current(client, app)) == without_events(before)
         state = command(ws, "set_power", enabled=True)
-        assert state["display"] == "ready" and state["monitoring_enabled"] is False
+        assert state["display"] == "bored" and state["monitoring_enabled"] is False
         assert state["observation_session"] != active_session
 
 
@@ -412,7 +412,7 @@ def test_dev_controls_disable_simulation_but_allow_camera_producer():
         state = ws.receive_json()
         assert state["dev_controls"] is False
         assert state["input_source"] == "camera"
-        assert command(ws, "preview_display", display="reminding")["type"] == "error"
+        assert command(ws, "preview_display", display="surprised")["type"] == "error"
         assert command(ws, "clear_preview")["type"] == "error"
         assert command(ws, "set_input_source", source="simulated")["type"] == "error"
         state = command(ws, "set_monitoring", enabled=True)
@@ -424,7 +424,7 @@ def test_dev_controls_disable_simulation_but_allow_camera_producer():
         assert upload(client, state["camera_session"]).status_code == 200
         state = ws.receive_json()
         assert state["frames_received"] == 1
-        assert state["camera_observation"]["presence"] == "unknown"
+        assert state["camera_observation"]["presence"] == "uncertain"
         assert state["reminder"]["active"] is False
 
 
@@ -468,7 +468,7 @@ def test_producer_disconnect_invalidates_input_and_broadcasts(rig):
         original_session = state["observation_session"]
         close_and_wait(client, app, producer, 1)
         state = viewer.receive_json()
-        assert state["display"] == "unavailable" and state["observation"]["source"] == "none"
+        assert state["display"] == "bored" and state["observation"]["source"] == "none"
         assert state["observation_session"] != original_session
         assert state["reminder"]["active"] is False
         assert observe(viewer, clock, state, source="simulated",
@@ -502,6 +502,6 @@ def test_new_backend_instance_resets_state_and_tokens():
         state = ws.receive_json()
         assert state["revision"] == 0 and state["powered_on"] is True
         assert state["monitoring_enabled"] is False and state["muted"] is True
-        assert state["display"] == "ready" and state["reminder"]["id"] == 0
+        assert state["display"] == "bored" and state["reminder"]["id"] == 0
         assert state["instance_id"] != original["instance_id"]
         assert state["observation_session"] != original["observation_session"]

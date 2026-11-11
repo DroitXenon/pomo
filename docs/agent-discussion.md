@@ -178,3 +178,72 @@ Reload the updated camera v4/app v16 client, keep the owner tab visible, check
 browser and OS camera settings and retry. Obtain the exact on-page failure before
 claiming the physical-camera issue is fixed. Preserve the other contributor's
 concurrent `a705dba` commit; remaining test/diagnostic edits are separate local work.
+
+### 2026-11-11-pomo-expression-identifiers
+
+- Date: 2026-11-11 16:21 UTC+00:00
+- Author: Pomo task owner / Codex
+- Type: Handoff
+- Related entries: 2026-11-04-pomo-camera-reminders-integration
+- Context: `fix/camera` working tree; backend, simulator, tests and protocol v8.
+
+**Idea or response:**
+The task owner requested five renamed expressions. Both `behavior_state` and
+`display` now use `happy`, `sad`, `surprised`, `bored` and `idle`; camera and
+observation availability identifiers are unchanged. Protocol v8 requires matching
+backend and simulator versions.
+
+**Reasoning and evidence:**
+Existing expressions and reminder thresholds keep their previous mapping. The
+full Python suite passed outside the sandbox (268 tests). TestClient hung inside
+the sandbox even for an empty FastAPI app. See `docs/verification.md` for exact
+checks and limits.
+
+**Next step:**
+Teammates should update both clients and backend together, then run the Node
+suites and check browser rendering and camera behavior.
+
+### 2026-11-11-pomo-happy-tracking-grace
+
+- Date: 2026-11-11 UTC+00:00
+- Author: Pomo task owner / Codex
+- Type: Handoff
+- Related entries: 2026-11-04-pomo-camera-reminders-integration, 2026-11-11-pomo-expression-identifiers
+- Context: `fix/camera` working tree; camera adapter, policy and protocol v8.
+
+**Idea or response:**
+At the task owner's request, an armed camera that briefly loses face tracking
+shows `happy` during the configured grace. The raw observation remains
+`not_detected` and normalized presence remains `unknown`; after grace, the
+existing absence threshold and reminder rules apply. Unarmed and uncertain or
+unavailable input still show `bored`.
+
+**Reasoning and evidence:**
+The Python suite passed outside the sandbox with 270 tests, including synthetic
+clock-controlled checks at the grace boundary and observation expiry. Physical
+camera and browser testing remain pending; see `docs/verification.md`.
+
+**Next step:**
+Teammates should use the updated protocol guidance when interpreting `unknown`
+observations and verify the display with a real camera.
+
+### 2026-11-11-pomo-visible-camera-description
+
+- Date: 2026-11-11 UTC+00:00
+- Author: Pomo task owner / Codex
+- Type: Handoff
+- Related entries: 2026-11-04-pomo-camera-startup-diagnostics, 2026-11-11-pomo-happy-tracking-grace
+- Context: `fix/camera` working tree; simulator camera status and diagnostics.
+
+**Idea or response:**
+The task owner requested an explanation beneath the camera status. The existing
+detection-status element is now visible there and describes tracking, image
+quality and reminders; detailed diagnostics remain collapsible.
+
+**Reasoning and evidence:**
+A V8 mocked frontend check covered ten camera conditions and disconnect; see
+`docs/verification.md`. Backend messages and camera capture are unchanged.
+
+**Next step:**
+Check the layout and status changes in a browser with a real camera; run the
+repository's Node tests where Node.js is available.

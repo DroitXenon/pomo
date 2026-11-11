@@ -22,12 +22,13 @@ def test_explicit_environment_overrides_all_settings():
         "POMO_ABSENCE_SECONDS": "2.5",
         "POMO_REMINDER_COOLDOWN_SECONDS": "0",
         "POMO_OBSERVATION_TIMEOUT_SECONDS": "4.25",
+        "POMO_UNCERTAINTY_SECONDS": "2",
     })
     assert settings.host == "0.0.0.0"
     assert settings.port == 8765
     assert settings.dev_controls is False
     assert settings.sound_enabled is True
-    assert settings.policy == PolicyConfig(2.5, 0, 4.25)
+    assert settings.policy == PolicyConfig(2.5, 0, 4.25, 2)
 
 
 def test_process_environment_is_used_only_when_no_mapping_is_supplied(monkeypatch):
@@ -61,6 +62,7 @@ def test_port_boundaries_are_accepted(value):
 @pytest.mark.parametrize("name", [
     "POMO_ABSENCE_SECONDS", "POMO_REMINDER_COOLDOWN_SECONDS",
     "POMO_OBSERVATION_TIMEOUT_SECONDS",
+    "POMO_UNCERTAINTY_SECONDS",
 ])
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf", "-1", "", "fast"])
 def test_invalid_duration_settings_are_rejected(name, value):
@@ -68,7 +70,7 @@ def test_invalid_duration_settings_are_rejected(name, value):
         Settings.from_env({name: value})
 
 
-@pytest.mark.parametrize("name", ["POMO_ABSENCE_SECONDS", "POMO_OBSERVATION_TIMEOUT_SECONDS"])
+@pytest.mark.parametrize("name", ["POMO_ABSENCE_SECONDS", "POMO_OBSERVATION_TIMEOUT_SECONDS", "POMO_UNCERTAINTY_SECONDS"])
 def test_detection_durations_must_be_positive(name):
     with pytest.raises(ValueError):
         Settings.from_env({name: "0"})

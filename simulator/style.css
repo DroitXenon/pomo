@@ -50,11 +50,11 @@ main { max-width: 1000px; margin: auto; padding: 28px 24px; }
 .left { left: 25px; }
 .right { right: 25px; }
 .robot-name { font-size: 12px; font-weight: 700; letter-spacing: 2px; color: #595959; padding: 12px; }
-.screen[data-display="distraction"] .mouth { transform: rotate(180deg); }
-.screen[data-display="reminding"] .eyes i { height: 29px; }
-.screen[data-display="reminding"] .mouth { border: 3px solid #f5f5f5; width: 13px; border-radius: 50%; }
-.screen[data-display="unavailable"] .eyes i { height: 4px; margin-top: 13px; }
-.screen[data-display="unavailable"] .mouth { border-radius: 0; height: 14px; }
+.screen[data-display="sad"] .mouth { transform: rotate(180deg); }
+.screen[data-display="surprised"] .eyes i { height: 29px; }
+.screen[data-display="surprised"] .mouth { border: 3px solid #f5f5f5; width: 13px; border-radius: 50%; }
+.screen[data-display="bored"] .eyes i { height: 4px; margin-top: 13px; }
+.screen[data-display="bored"] .mouth { border-radius: 0; height: 14px; }
 #state-title { font-size: 21px; font-weight: 600; margin: 25px 0 18px; }
 
 button { font: inherit; cursor: pointer; border: 1px solid #404040; border-radius: 9px; padding: 12px; background: #181818; color: #e5e5e5; }
@@ -87,10 +87,10 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 [hidden] { display: none !important; }
 .robot-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 .robot-actions > button { min-height: 44px; }
-.screen[data-display="shutdown"] .eyes,
-.screen[data-display="shutdown"] .mouth,
-.screen[data-display="shutdown"] .cheek { visibility: hidden; }
-.screen[data-display="shutdown"]::after { content: ""; position: absolute; width: 24px; height: 3px; background: #737373; top: 64px; left: calc(50% - 12px); }
+.screen[data-display="idle"] .eyes,
+.screen[data-display="idle"] .mouth,
+.screen[data-display="idle"] .cheek { visibility: hidden; }
+.screen[data-display="idle"]::after { content: ""; position: absolute; width: 24px; height: 3px; background: #737373; top: 64px; left: calc(50% - 12px); }
 #preview-status { margin: -8px 0 18px; }
 .reminder-panel { margin-top: 22px; padding: 18px 14px; border: 1px solid #d4d4d4; border-radius: 10px; background: #202020; }
 .reminder-panel p { font-size: 14px; line-height: 1.6; margin: 0 0 14px; }

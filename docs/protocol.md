@@ -1,13 +1,13 @@
-# Protocol v7
+# Protocol v9
 
 The backend serves the simulator at `/`, reports health at `/health` and accepts WebSocket connections at `/ws` on the same origin. Use `ws` for HTTP and `wss` for HTTPS.
 
-Version 7 combines the v2 reminder branch and v6 browser-camera branch. It preserves browser JPEG ingestion and uses one shared reminder policy for camera and simulated input. Display identifiers are `ready`, `shutdown`, `distraction`, `reminding` and `unavailable`; `possible_absence` is no longer a display identifier. Update backend and simulator together; earlier clients are incompatible.
+Version 9 unifies presence values as `present`, `absent`, `uncertain` and `unavailable`. `camera_observation.presence` and `observation.presence` are the same shared value in every snapshot. Update backend and simulator together; v8 and earlier clients are incompatible.
 
 `GET /health` returns:
 
 ```json
-{"status":"ok","phase":2,"protocol_version":7,"camera_processor_ready":true}
+{"status":"ok","phase":2,"protocol_version":9,"camera_processor_ready":true}
 ```
 
 ## Transport and State Ownership
@@ -36,20 +36,20 @@ The following example shows the complete shape; instance/session IDs, revision a
 ```json
 {
   "type": "state",
-  "protocol_version": 7,
+  "protocol_version": 9,
   "instance_id": "6fe3ecf8-69bc-468d-b690-5dc162dc9393",
   "revision": 0,
   "dev_controls": true,
   "powered_on": true,
   "monitoring_enabled": false,
   "muted": true,
-  "behavior_state": "ready",
-  "display": "ready",
+  "behavior_state": "bored",
+  "display": "bored",
   "preview_active": false,
   "camera_status": "unavailable",
   "observation_session": "fece9f0ba618451ea17e8ef3ab8dafde",
   "observation": {
-    "presence": "unknown",
+    "presence": "unavailable",
     "source": "none",
     "observed_at": null,
     "age_seconds": null
@@ -77,7 +77,7 @@ The following example shows the complete shape; instance/session IDs, revision a
   },
   "frames_received": 0,
   "last_frame": null,
-  "camera_observation": null,
+  "camera_observation": {"presence": "unavailable", "reason": "no_camera_data"},
   "head_direction": "unknown",
   "camera_armed": false,
   "camera_tracking_status": "paused",
@@ -89,11 +89,11 @@ The following example shows the complete shape; instance/session IDs, revision a
 | --- | --- |
 | `instance_id` | Identifies this backend application instance; changes on restart |
 | `revision` | Increments for accepted commands and subsequent published state/diagnostic changes; it is not a command-only counter |
-| `behavior_state` | Actual policy state: `ready`, `shutdown`, `distraction`, `reminding` or `unavailable` |
+| `behavior_state` | Actual policy state: `happy`, `idle`, `sad`, `surprised` or `bored` |
 | `display` | Rendered expression; equals behaviour unless a manual preview is active |
 | `preview_active` | Whether a development expression preview is overriding rendering |
 | `camera_status` | `available` or `unavailable`, independently of WebSocket connection status |
-| `observation.presence` | `present`, `absent` or `unknown`; unavailable input is represented as unknown presence |
+| `observation.presence` | `present`, `absent`, `uncertain` or `unavailable` |
 | `observation.source` | `none`, `simulated` or `camera` |
 | `observation.observed_at` | Last accepted source timestamp, in Unix seconds, or `null` |
 | `observation.age_seconds` | Source age on receipt plus subsequent monotonic elapsed time, or `null` |
@@ -104,7 +104,7 @@ The following example shows the complete shape; instance/session IDs, revision a
 | `reminder.active` / `message` | Whether a real visual reminder is active and its supportive text; message is `null` when inactive |
 | `events` | Up to 100 recent backend events in oldest-to-newest order |
 
-Connection status is a client-side transport condition. It must not be interpreted as user absence. A camera can be available while tracking is uncertain; in that case presence is `unknown` and behaviour is `unavailable`.
+Connection status is a client-side transport condition. It must not be interpreted as user absence. A camera can be available while tracking is uncertain; fresh `uncertain` observations show `happy` and become `absent` after the configured uncertainty period (default 1 second).
 
 Additional camera fields are:
 
@@ -114,7 +114,7 @@ Additional camera fields are:
 | `camera_session` | Opaque upload token only visible to its owning WebSocket |
 | `camera_processor_ready` | Whether model initialization succeeded; simulation can work when false |
 | `camera_capture_status` | Capture/transport: `paused`, `starting`, `available`, `unavailable` |
-| `camera_observation` | Latest raw, validated camera diagnostics, or null after invalidation |
+| `camera_observation` | Shared current `presence` with camera diagnostics when available; its presence equals `observation.presence` in every snapshot |
 | `head_direction` | Camera-relative `forward`, `left`, `right`, `up`, `down` or `unknown` |
 | `camera_armed` | Whether stable visible-face evidence permits camera absence reminders |
 | `camera_tracking_status` | Baseline/grace/quality diagnostic, separate from actual `behavior_state` |
@@ -123,9 +123,11 @@ Additional camera fields are:
 
 `camera_status` retains the policy input availability meaning from v2;
 `camera_capture_status` holds the browser capture meaning formerly named
-`camera_status` in v6. `observation` is the normalized policy input;
-`camera_observation` holds the richer v6 diagnostic schema. They are deliberately
-separate so clock domains and unknown input are not confused with absence.
+`camera_status` in v6. `observation` is the policy input; `camera_observation.presence` is the same
+normalized value and camera diagnostic fields provide the reason and measurements.
+When no camera diagnostics are retained, a placeholder with the shared presence
+and `no_camera_data` reason is exposed. Presence values remain distinct from camera availability and
+connection health.
 
 ## Strict Commands
 
@@ -155,9 +157,9 @@ be replaced by a synthetic packet while camera mode is selected.
 ```
 
 - Enabling monitoring requires power on. An actual monitoring change clears the preview, input and active reminder, rotates the observation-session token and requires fresh observations.
-- Pausing monitoring returns behaviour to `ready` and preserves any remaining cooldown.
-- `set_power` is a soft power control. Power off enters `shutdown`, disables monitoring and clears input, preview, active reminder and cooldown. It does not terminate HTTP or WebSocket serving.
-- Power on returns to `ready` with monitoring paused. Repeating an unchanged power or monitoring setting is idempotent at policy level, although an accepted command still receives a new revision.
+- Pausing monitoring returns behaviour to `happy` and preserves any remaining cooldown.
+- `set_power` is a soft power control. Power off enters `idle`, disables monitoring and clears input, preview, active reminder and cooldown. It does not terminate HTTP or WebSocket serving.
+- Power on returns to `bored` with monitoring paused. Repeating an unchanged power or monitoring setting is idempotent at policy level, although an accepted command still receives a new revision.
 
 ### Sound and dismissal
 
@@ -169,16 +171,16 @@ be replaced by a synthetic packet while camera mode is selected.
 
 Mute is a shared preference. It does not change reminder IDs or trigger a new reminder. The browser needs a user gesture to unlock its local audio context; visual reminders work when audio is unavailable.
 
-Dismissal requires a strict positive integer matching the currently active reminder. A stale or inactive ID is rejected. Dismissal clears the visual cue, returns ongoing absence to `distraction` and ensures a full new cooldown using `max(existing_deadline, dismissal_time + cooldown)`.
+Dismissal requires a strict positive integer matching the currently active reminder. A stale or inactive ID is rejected. Dismissal clears the visual cue, returns ongoing absence to `sad` and ensures a full new cooldown using `max(existing_deadline, dismissal_time + cooldown)`.
 
 ### Development expression previews
 
 ```json
-{"type":"preview_display","display":"distraction"}
+{"type":"preview_display","display":"sad"}
 {"type":"clear_preview"}
 ```
 
-Preview accepts any of the five display identifiers. It requires power on, monitoring paused and development controls enabled. It changes rendering only: previewing `reminding` does not activate a real reminder, increment its ID or play a sound; previewing `shutdown` does not power off the backend policy.
+Preview accepts any of the five display identifiers. It requires power on, monitoring paused and development controls enabled. It changes rendering only: previewing `surprised` does not activate a real reminder, increment its ID or play a sound; previewing `idle` does not power off the backend policy.
 
 ### Simulated observation ingestion
 
@@ -194,7 +196,7 @@ Preview accepts any of the five display identifiers. It requires power on, monit
 
 Replace the illustrative timestamp with the actual observation time and the token with the latest `observation_session`.
 
-- `presence`: `present`, `absent`, `unknown` or `unavailable`.
+- `presence`: `present`, `absent`, `uncertain` or `unavailable`.
 - `source`: `simulated`; camera observations arrive through the frame adapter.
 - `observed_at`: a finite JSON number in Unix seconds.
 - `session_id`: a non-empty string of at most 100 characters, matching the current session.
@@ -209,17 +211,17 @@ With `POMO_DEV_CONTROLS=false`, simulated input selection/observations and both 
 
 | Input or action | Result |
 | --- | --- |
-| Monitoring enabled without valid input | `unavailable`; no reminder |
-| Fresh `present` | `ready`; clear pending duration and active reminder; retain cooldown |
-| Fresh `absent` | `distraction`; start/continue a sustained absence window |
-| Absence threshold reached with fresh input and no cooldown | `reminding`; increment reminder ID, show message and start cooldown |
+| Monitoring enabled without valid input | `bored`; no reminder |
+| Fresh `present` | `happy`; clear pending duration and active reminder; retain cooldown |
+| Fresh `absent` | `sad`; start/continue a sustained absence window |
+| Absence threshold reached with fresh input and no cooldown | `surprised`; increment reminder ID, show message and start cooldown |
 | Reminder remains active | Keep the same reminder; do not repeatedly trigger cues when its original cooldown ends |
 | Dismissal | Clear the active reminder and begin a full quiet period; continuing absence may retrigger only after cooldown |
-| Fresh `unknown` | Camera available but tracking uncertain; clear pending duration/reminder and enter `unavailable` |
-| Fresh `unavailable` | Camera unavailable; clear pending duration/reminder and enter `unavailable` |
-| Observation timeout or producer disconnect | Clear input and active reminder, rotate the session token and enter `unavailable` while monitoring |
-| Monitoring pause | Clear input and active reminder, rotate session and show `ready`; retain cooldown |
-| Power off | Show `shutdown`; reset monitoring, input, reminder and cooldown |
+| Fresh `uncertain` | Clear pending duration/reminder and show `happy`; after 1 second of continuous fresh uncertainty report `absent` and start the absence timer |
+| Fresh `unavailable` | Camera unavailable; clear pending duration/reminder and enter `bored` |
+| Observation timeout or producer disconnect | Clear input and active reminder, rotate the session token and enter `bored` while monitoring |
+| Monitoring pause | Clear input and active reminder, rotate session and show `bored`; retain cooldown |
+| Power off | Show `idle`; reset monitoring, input, reminder and cooldown |
 
 A reminder needs continuing fresh observations, not one old absence event. Producers should send observations more frequently than the configured timeout. The simulator sends selected simulated observations as a heartbeat until monitoring pauses, power turns off, the tab disconnects or the producer selects unavailable input.
 
@@ -250,7 +252,7 @@ Success: `{"accepted":true,"sequence":0}`. Errors: 400 invalid JPEG/sequence,
 415 wrong media type, 429 busy, 503 worker failure. Pure validation rejections do
 not increment revision. An expired session, processing timeout or worker failure
 can invalidate camera input, clear reminders, increment revision and broadcast the
-resulting unavailable state. A decoded
+resulting bored state. A decoded
 frame marks camera available and increments `frames_received` (per session).
 
 The browser uses one upload at a time, sampling a new frame after the previous
@@ -273,20 +275,24 @@ The browser also stops on pagehide or tab hiding. Re-enable explicitly after los
 
 The startup allowance is 30 seconds; subsequent capture idle timeout is 3 seconds.
 Observation evidence expires sooner (default 1 second), independently of capture.
-Camera unavailability clears pending and active reminders and shows `unavailable`
-while monitoring remains enabled. Intentional pause returns `ready`.
+Camera unavailability clears pending and active reminders and shows `bored`
+while monitoring remains enabled. Intentional pause returns `bored`.
 
-Raw observations use server receipt/completion monotonic timestamps and presence
-`present`, `not_detected` or `unknown`. They retain reason, brightness, blur variance,
-head pose, normalized face box, raw blendshapes and per-eye diagnostics. Images are
-not part of observations. For policy input, receipt time is converted to Unix time
-with processing age retained; model `not_detected` maps to `absent` only after the
-stable-face baseline and tracking-loss grace have qualified it. Poor lighting,
-blur, unavailable input, excessive processing age and stale gaps map to unknown,
-clear reminders and require a fresh baseline.
+Camera detections retain reason, brightness, blur variance, head pose, normalized
+face box, raw blendshapes and per-eye diagnostics. Images are not part of
+observations. `camera_observation.presence` and `observation.presence` expose the
+same final policy value, including during simulated input or when no frame is
+available. Camera diagnostics have a separate reason such as `no_face` so that
+raw non-detection is distinguishable without exposing a different presence.
+
+An armed camera with a briefly missing face reports `uncertain` and displays
+`happy` during the tracking-loss grace, without starting an absence timer. Continuous fresh no-face results become `absent` after the uncertainty period. Without a baseline,
+no face remains `uncertain` until the uncertainty period elapses, then becomes `absent`. Poor lighting, blur and invalid
+face landmarks are `uncertain`; unavailable camera input, stale processing and
+stale gaps are `unavailable`. Initially both clear pending and active reminders. Fresh uncertainty lasting one second becomes absent; unavailable input stays unavailable.
 
 Any fresh present observation clears an active cue immediately; stable presence
-arms subsequent absence reminders. Stable presence defaults to 0.5 seconds; tracking-loss grace defaults to 1 second.
+establishes the diagnostic baseline. Stable presence defaults to 0.5 seconds; tracking-loss grace defaults to 1 second and affects diagnostics.
 The normalized engine's absence threshold is 5 seconds after qualifying absence
 begins. `camera_absence_duration_seconds` exposes the raw interval before that
 gate, so an empty scene can be diagnosed without arming a reminder. Head direction,
@@ -327,7 +333,7 @@ include `usable`, `blink`, `missing_landmarks`, `invalid_landmarks`, `eye_too_sm
 `eye_closed`, `invalid_eye_geometry`, `iris_outside_eye`, `head_pose_unavailable`, `head_turned`
 and default `unavailable`. Unknown and closed directions have null positions. An absent or
 unknown face defaults to unknown eye observations, so no previous direction persists.
-This optional observation field is additive within protocol v7.
+This optional observation field is additive within protocol v9.
 
 `blendshapes` also includes `eyeLookUpLeft`, `eyeLookDownLeft`, `eyeLookUpRight`
 and `eyeLookDownRight`. A vertical coefficient must meet the configured threshold
@@ -384,6 +390,7 @@ A backend restart creates a new instance ID, resets reminder/event counters and 
 
 | Environment setting | Default | Constraint |
 | --- | --- | --- |
+| `POMO_UNCERTAINTY_SECONDS` | `1` | Continuous fresh uncertainty before it becomes absent |
 | `POMO_ABSENCE_SECONDS` | `5` | At startup: finite, greater than zero, at most 3600, and at least camera tracking-loss grace |
 | `POMO_REMINDER_COOLDOWN_SECONDS` | `30` | Finite, non-negative |
 | `POMO_OBSERVATION_TIMEOUT_SECONDS` | `3` | Finite, greater than zero |

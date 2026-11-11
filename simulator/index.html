@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pomo · Simulator</title>
-  <link rel="stylesheet" href="style.css?v=9"><script src="camera.js?v=4" defer></script><script src="app.js?v=16" defer></script>
+  <link rel="stylesheet" href="style.css?v=10"><script src="camera.js?v=4" defer></script><script src="app.js?v=19" defer></script>
 </head>
 <body>
   <header>
@@ -13,7 +13,7 @@
   <main>
     <div class="workspace">
       <section class="robot-panel" aria-label="Simulated robot">
-        <div class="robot" aria-hidden="true"><div class="antenna"></div><div class="screen" id="screen" data-display="ready"><div class="eyes"><i></i><i></i></div><div class="mouth"></div><span class="cheek left"></span><span class="cheek right"></span></div><div class="robot-name">pomo</div></div>
+        <div class="robot" aria-hidden="true"><div class="antenna"></div><div class="screen" id="screen" data-display="bored"><div class="eyes"><i></i><i></i></div><div class="mouth"></div><span class="cheek left"></span><span class="cheek right"></span></div><div class="robot-name">pomo</div></div>
         <h2 id="state-title" aria-live="polite">Connecting…</h2>
         <p id="preview-status" class="small" hidden></p>
         <div class="robot-actions">
@@ -45,11 +45,11 @@
             <canvas id="face-overlay" width="640" height="480" aria-hidden="true"></canvas>
           </div>
           <p id="camera-status" class="small" role="status">Camera paused</p>
+          <p id="detection-status" class="small" role="status">Detection paused</p>
           <button id="retry-camera" hidden disabled>Retry camera</button>
           <details class="diagnostics">
             <summary>Camera diagnostics</summary>
-            <p id="detection-status" class="small" role="status">Detection paused</p>
-            <div class="detail-row"><span>Face</span><strong id="face-presence">Unknown</strong></div>
+            <div class="detail-row"><span>Face</span><strong id="face-presence">Unavailable</strong></div>
             <div class="detail-row"><span>Head direction</span><strong id="head-direction">Unknown</strong></div>
             <div class="detail-row"><span>Head angles</span><strong id="head-angles">—</strong></div>
             <div class="detail-row"><span>Image quality</span><strong id="image-quality">—</strong></div>
@@ -68,7 +68,7 @@
           <div class="inputs">
             <button data-observation="present" disabled>Present</button>
             <button data-observation="absent" disabled>Absent</button>
-            <button data-observation="unknown" disabled>Uncertain</button>
+            <button data-observation="uncertain" disabled>Uncertain</button>
             <button data-observation="unavailable" disabled>Unavailable</button>
           </div>
           <p id="simulation-status" class="small">Enable monitoring, then select an input.</p>
@@ -87,11 +87,11 @@
           <summary>Expression previews</summary>
           <p id="previews-status" class="small">Pause monitoring to preview expressions.</p>
           <div class="previews">
-            <button data-preview="ready" disabled>Ready</button>
-            <button data-preview="shutdown" disabled>Shutdown</button>
-            <button data-preview="distraction" disabled>Distraction</button>
-            <button data-preview="reminding" disabled>Reminder</button>
-            <button data-preview="unavailable" disabled>Unavailable</button>
+            <button data-preview="happy" disabled>Happy</button>
+            <button data-preview="idle" disabled>Idle</button>
+            <button data-preview="sad" disabled>Sad</button>
+            <button data-preview="surprised" disabled>Surprised</button>
+            <button data-preview="bored" disabled>Bored</button>
             <button id="clear-preview" disabled>Clear preview</button>
           </div>
         </details>

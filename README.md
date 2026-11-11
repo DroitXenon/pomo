@@ -20,9 +20,9 @@ The prototype scope is camera detection, robot display and reminders. Pomodoro t
 
 ### Phase 2: Add Basic Functions
 
-Implemented on `feature/states`: browser webcam capture, bounded JPEG transport, Face Landmarker presence/head diagnostics, and one five-state reminder policy. Camera and simulated input both drive the robot display, global monitoring, soft power, dismissal, configurable cooldown, optional sound/mute and bounded debug logs. Physical-camera evaluation remains pending.
+Implemented: browser webcam capture, bounded JPEG transport, Face Landmarker presence/head diagnostics, and one five-state reminder policy. Camera and simulated input both drive the robot display, global monitoring, soft power, dismissal, configurable cooldown, optional sound/mute and bounded debug logs. Physical-camera evaluation remains pending.
 
-The first detection target is whether the user leaves the frame. Presence observations do not establish concentration or distraction. Unknown tracking, missing input and disconnected sources lead to detection-unavailable behaviour.
+The first detection target is whether the user leaves the frame. Presence observations do not establish concentration or distraction. Fresh uncertain observations show happy and become absent after one second by default; missing or disconnected input remains unavailable.
 
 Implementation follows the [Reminders](https://app.notion.com/p/40a66acb0c0380f5bacfc18ac6fa598a), [States Implementation](https://app.notion.com/p/40a66acb0c0380deaf4fd7dbefb28b04), [Debug Logs](https://app.notion.com/p/40a66acb0c0380078ca4ef9dcfaed7e9) and [Camera Detection](https://app.notion.com/p/40a66acb0c038013b8b5eb483fa9e18e) specifications. Defaults are configurable; camera frames are processed in memory without recording or persistence.
 
@@ -72,22 +72,21 @@ failure release or invalidate capture. Frames never enter logs or persistent
 storage. The versioned model URL/checksum are in [models/README.md](models/README.md).
 
 `backend/app.py` adapts raw camera observations to `ReminderEngine`. Stable visible
-presence (default 0.5 s) establishes a baseline; tracking loss gets a 1 s grace
-period before qualifying absence begins. Five further seconds of continuous fresh
-absence triggers a reminder by default. Initial non-detection is counted in camera
-diagnostics but cannot remind without a baseline. Poor light, blur, stale results
-and uncertain tracking clear evidence and require a fresh baseline. Observation
+presence (default 0.5 s) establishes a diagnostic baseline. Missing faces produce
+uncertain observations; continuous uncertainty becomes absent after one second by
+default, including initial non-detection. Five further seconds of continuous fresh absence triggers a reminder by default. Poor light and blur can therefore lead to an absence reminder. Stale input remains unavailable. Observation
 freshness (1 s) is independent of the capture idle timeout (3 s).
 
-The simulator shows preview, face box, presence, quality reason, head direction,
-angles, raw absence duration and policy cooldown. Retained eye/mouth observations
+The simulator shows a live detection description below the camera status, plus
+preview, face box, presence, quality reason, head direction, angles, raw absence
+duration and policy cooldown. Retained eye/mouth observations
 are experimental diagnostics inside collapsed details; they do not
 establish attention or trigger reminders. Physical accuracy remains unverified.
 
 Select **Simulated** while paused to test the same reminder engine without camera
 access or a usable model. Then enable monitoring and choose a synthetic observation.
 The source selector is a development control; production-style operation uses
-camera input. [Protocol v7](docs/protocol.md) defines both paths. The previous
+camera input. [Protocol v9](docs/protocol.md) defines both paths. The previous
 standalone `backend/behaviour.py` remains for historical regression tests; the live
 application has one reminder policy in `backend/policy.py`. Physical firmware
 remains unimplemented.
@@ -151,6 +150,7 @@ The backend reads `.env` from the repository root. Process environment variables
 | `POMO_HOST` | `127.0.0.1` | Uvicorn bind address |
 | `POMO_PORT` | `8000` | Shared HTTP/WebSocket port; accepts 1–65535 |
 | `POMO_DEV_CONTROLS` | `true` | Allows simulated observations and expression previews |
+| `POMO_UNCERTAINTY_SECONDS` | `1` | Continuous fresh uncertainty before it becomes absent |
 | `POMO_ABSENCE_SECONDS` | `5` | Continuous qualifying fresh absence before a reminder; greater than 0, at most 3600 s, and at least the camera tracking-loss grace |
 | `POMO_REMINDER_COOLDOWN_SECONDS` | `30` | Quiet period after triggering or dismissing; finite and non-negative |
 | `POMO_OBSERVATION_TIMEOUT_SECONDS` | `3` | Maximum observation age; finite and greater than zero |
@@ -186,15 +186,15 @@ is processed at a time; old frames are not queued or replayed.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `POMO_TRACKING_LOSS_GRACE_SECONDS` | 1 | Camera grace before normalized absence qualifies; raw camera duration includes it |
+| `POMO_TRACKING_LOSS_GRACE_SECONDS` | 1 | Duration used to distinguish tracking-loss diagnostics from possible absence |
 | `POMO_ABSENCE_SECONDS` | 5 | Shared threshold after qualifying fresh absence begins |
-| `POMO_RETURN_SECONDS` | 0.5 | Stable face presence needed to arm camera absence reminders |
+| `POMO_RETURN_SECONDS` | 0.5 | Stable face presence needed to establish the camera diagnostic baseline |
 | `POMO_OBSERVATION_MAX_AGE_SECONDS` | 1 | Maximum age/gap of usable evidence |
 | `POMO_PERCEPTION_DETECTION_CONFIDENCE` | 0.5 | MediaPipe detection threshold |
 | `POMO_PERCEPTION_PRESENCE_CONFIDENCE` | 0.5 | MediaPipe face-presence threshold |
 | `POMO_PERCEPTION_TRACKING_CONFIDENCE` | 0.5 | MediaPipe tracking threshold |
 | `POMO_PERCEPTION_MIN_BRIGHTNESS` / `POMO_PERCEPTION_MAX_BRIGHTNESS` | 35 / 230 | Usable grayscale mean range |
-| `POMO_PERCEPTION_MIN_BLUR_VARIANCE` | 5 | Minimum Laplacian variance; below this is unknown; 0 disables |
+| `POMO_PERCEPTION_MIN_BLUR_VARIANCE` | 5 | Minimum Laplacian variance; below this is uncertain; 0 disables |
 | `POMO_PERCEPTION_YAW_DEGREES` / `POMO_PERCEPTION_PITCH_DEGREES` | 30 / 25 | Direction thresholds relative to the camera |
 | `POMO_PERCEPTION_HYSTERESIS_DEGREES` | 5 | Direction exit margin to reduce flicker |
 
@@ -210,25 +210,74 @@ is processed at a time; old frames are not queued or replayed.
 | `POMO_PERCEPTION_EYE_MAX_PITCH_DEGREES` | 45 | Maximum absolute head pitch for iris interpretation |
 
 Choose freshness limits above the expected upload interval plus processing latency.
-Processing results older than the observation limit are unknown even when the
+Processing results older than the observation limit are unavailable even when the
 camera transport remains available. All timing uses the backend's monotonic clock.
 
 
-## States and Reminders
+## Observations, Expressions and Reminders
 
-| Actual state | Meaning |
-| --- | --- |
-| `ready` | Powered on with monitoring paused, or fresh presence restored |
-| `shutdown` | Soft power off; monitoring, input, preview, active reminder and cooldown cleared |
-| `distraction` | Fresh absence under evaluation or ongoing absence during cooldown |
-| `reminding` | A real visual reminder is active |
-| `unavailable` | Monitoring is enabled but input is missing, expired, unavailable or uncertain |
+An **observation** is the presence value currently used by the backend's reminder
+policy. It comes from the selected Camera or Simulated input. An **expression** is
+the robot face selected by that policy; the same observation can produce different
+expressions depending on elapsed time, cooldown, monitoring and power. These values
+describe face presence and input quality, not whether someone is paying attention.
 
-Power off is a reversible policy state, not a server shutdown. Wake returns to ready with monitoring paused. Monitoring changes discard old observations and require fresh input. Pausing, returning presence, unknown input and unavailable input clear active reminders and pending absence duration; remaining cooldown is retained. Power cycling clears cooldown.
+### The four observations
 
-An absence must remain continuously supported by fresh observations for the configured threshold. A triggered reminder stays active until dismissed, presence returns, input becomes uncertain/unavailable, monitoring pauses or power turns off. An active reminder never repeatedly retriggers when its original cooldown expires.
+| Observation | When it occurs | Effect while powered on and monitoring |
+| --- | --- | --- |
+| `present` | The camera detects a usable face, or the Present simulation is selected. | Show `happy`; clear the current absence duration and any active reminder. The existing cooldown is retained. |
+| `uncertain` | A fresh camera frame has no detected face, poor light, overexposure, blur or invalid face landmarks, or the Uncertain simulation is selected. A camera with no face produces this value even before a visible-face baseline has been established. | Show `happy` initially and clear the previous absence duration and active reminder. If uncertainty continues with fresh input for **1 second by default**, change the policy observation to `absent`. A `present` observation before then cancels the uncertainty period. |
+| `absent` | The Absent simulation is selected, or fresh `uncertain` input continues for the configured uncertainty period. The camera's initial no-face result goes through `uncertain` first. | Show `sad` and start the absence timer. Once absence continues for **5 seconds by default**, show `surprised` and activate a reminder if the cooldown has ended. |
+| `unavailable` | There is no current usable input: for example, monitoring has just started, the camera fails or disconnects, input expires, or the Unavailable simulation is selected. Observation is also reset to this value when monitoring is paused or power is turned off. | Show `bored` while monitoring is on; clear pending absence and any active reminder. Unavailable input does not turn into `absent` with time. Power off instead shows `idle`. |
 
-Dismissal starts a full new quiet period. If absence continues, a new reminder can appear only after that cooldown. Every real reminder has an increasing ID scoped to the backend instance, so stale dismissals and repeated snapshots cannot replay a previous cue.
+`POMO_UNCERTAINTY_SECONDS` controls the uncertain-to-absent delay (default 1 s),
+and `POMO_ABSENCE_SECONDS` controls the subsequent absence-to-reminder delay
+(default 5 s). They are separate timers. Fresh input must continue throughout:
+if camera observations become stale (default 1 s), or simulated observations
+expire (default 3 s), input becomes unavailable and the timers reset. In the
+simulator, Present, Absent and Uncertain send repeated observations while selected;
+Unavailable sends a single unavailable observation.
+
+Camera diagnostics retain a reason such as `no_face` or `low_light`, but the
+displayed `camera_observation.presence` and policy `observation.presence` share
+the policy value. Consequently, an `absent` observation after sustained uncertainty
+is a policy classification, including when poor image quality caused the
+uncertainty; it is not proof that the user left.
+
+### The five expressions
+
+| Expression | When it is displayed | How it changes |
+| --- | --- | --- |
+| `happy` | Monitoring is on and the latest policy observation is `present`, or fresh `uncertain` has lasted less than the configured uncertainty period. | Changes to `sad` when continuous uncertainty becomes `absent` or Absent is simulated; changes to `bored` on pause or unavailable input, or to `idle` on power off. |
+| `bored` | Pomo starts powered on with monitoring paused, monitoring is paused, or monitoring is on but input is missing, expired or unavailable. Wake also returns here with monitoring paused. | Enabling monitoring alone leaves it `bored` until a usable observation arrives. Fresh `present` or initial `uncertain` changes it to `happy`; direct simulated `absent` changes it to `sad`; power off changes it to `idle`. |
+| `sad` | The policy observes `absent`, but the absence threshold has not yet triggered a reminder, or absence continues during cooldown after a dismissal. | Sustained fresh absence reaches the reminder threshold and the cooldown ends: `surprised`. Presence or new uncertainty: `happy`. Unavailable input or pause: `bored`. Power off: `idle`. |
+| `surprised` | A real reminder has been triggered after sustained absence and is still active. | Dismissal returns to `sad`; presence or newly uncertain input returns to `happy`; unavailable input or pause returns to `bored`; power off changes it to `idle`. |
+| `idle` | Pomo is powered off through the soft power control. Monitoring, input, preview, active reminder and cooldown are cleared. | Wake returns to `bored` with monitoring paused; monitoring must then be enabled again. |
+
+For example, with default settings and continuing fresh camera frames, an initial
+no-face or poor-quality result shows **Uncertain / Happy**; after 1 second it
+becomes **Absent / Sad**; after a further 5 seconds of absence it becomes
+**Absent / Surprised**, provided cooldown has ended. Frame sampling and the backend
+timer can add a small delay. Present input at any stage returns to Happy; stale or
+unavailable input returns to Bored instead of sustaining the countdown.
+
+Pausing or changing monitoring discards old observations and requires fresh input.
+Returning presence, the start of uncertainty, unavailable input and pausing clear
+active reminders and pending absence duration, but retain remaining cooldown.
+Power off is reversible and does not stop the server; a power cycle clears cooldown.
+
+A triggered reminder stays active until dismissed, presence returns, input becomes
+uncertain or unavailable, monitoring pauses or power turns off. It does not repeatedly
+retrigger when its original cooldown expires. Dismissal starts a full new quiet
+period (default 30 s); continuing absence may trigger again only after that period.
+Every real reminder has an increasing ID scoped to the backend instance, so stale
+dismissals and repeated snapshots cannot replay a previous cue.
+
+**Expression previews** are development controls available while Pomo is powered on
+and monitoring is paused. They temporarily override the displayed face without
+changing the actual policy state, activating a reminder or playing sound. Clear the
+preview, enable monitoring or change power to return to the actual state.
 
 Sound is optional and initially muted. Unmute/enable audio through a user gesture in each tab. A newly received real reminder can play one short cue; initial/reconnect snapshots, preview expressions and repeated snapshots do not replay it. Browser audio restrictions or unsupported audio do not prevent visual reminders.
 
@@ -237,11 +286,11 @@ Sound is optional and initially muted. Unmute/enable audio through a user gestur
 | Endpoint | Transport | Contract |
 | --- | --- | --- |
 | `/` | HTTP GET | Simulator and same-origin static assets |
-| `/health` | HTTP GET | Service status, phase 2, protocol 7 and camera processor readiness |
+| `/health` | HTTP GET | Service status, phase 2, protocol 9 and camera processor readiness |
 | `/ws` | WebSocket | Strict JSON commands, complete state snapshots and validation errors |
 | `/camera/frame` | HTTP POST | Bounded raw JPEG with private camera-session and increasing sequence headers |
 
-Protocol version 7 combines both branches. It uses `distraction` instead of the old `possible_absence` display. Update backend and simulator together; v2 and v6 clients are incompatible.
+Protocol version 9 unifies camera and policy presence as `present`, `absent`, `uncertain` and `unavailable`. Both `camera_observation.presence` and `observation.presence` expose the same current value; camera diagnostics retain the reason separately. Update backend and simulator together; v8 and earlier clients are incompatible.
 
 Commands cover `set_input_source`, `camera_failed`, `set_monitoring`, `set_power`, `set_muted`, `dismiss_reminder`, `submit_observation`, `preview_display` and `clear_preview`. For example:
 
@@ -253,7 +302,7 @@ Commands cover `set_input_source`, `camera_failed`, `set_monitoring`, `set_power
 
 Each snapshot includes actual `behavior_state`, rendered `display`, power/monitoring/mute state, camera/input metadata, observation-session token, absence duration, cooldown, active reminder, settings and up to 100 backend events. Manual previews require power on and monitoring paused; they change rendering only and never create reminders or sounds.
 
-Observation producers copy the latest session token, send strictly increasing finite Unix timestamps and discard buffered packets on lifecycle changes or disconnect. A source timeout invalidates the session. Unknown/binary/malformed messages and extra or incorrectly typed fields are rejected without applying a policy operation. Incoming message size is limited to 4,096 bytes. Full schemas, examples and recovery rules are in [protocol v7](docs/protocol.md).
+Observation producers copy the latest session token, send strictly increasing finite Unix timestamps and discard buffered packets on lifecycle changes or disconnect. A source timeout invalidates the session. Unknown/binary/malformed messages and extra or incorrectly typed fields are rejected without applying a policy operation. Incoming message size is limited to 4,096 bytes. Full schemas, examples and recovery rules are in [protocol v9](docs/protocol.md).
 
 The simulator retries connections with capped exponential backoff and disables controls until a valid snapshot arrives. Disconnect stops simulated heartbeats and local audio. Reconnection restores current shared state but requires a fresh simulated-input selection; offline commands and old sounds are not replayed.
 
@@ -281,15 +330,15 @@ The existing Starlette/HTTPX test-adapter deprecation warning remains. See [veri
 Manual simulator demonstration:
 
 1. Start the backend, open the simulator and confirm Connected.
-2. While paused, select Simulated input, then enable monitoring. Without input the state is Detection unavailable.
-3. Select Absent under simulated input. Continuing fresh observations first show Distraction, then a visual reminder after the threshold.
+2. While paused, select Simulated input, then enable monitoring. Without input the expression is Bored.
+3. Select Absent under simulated input. Continuing fresh observations first show Sad, then a visual reminder after the threshold.
 4. Dismiss it and watch the cooldown. Select Present to clear pending absence; select Uncertain or Unavailable to stop detection-driven reminders.
 5. Enable sound through the button to allow local audio for new reminders; mute stops an in-flight cue.
 6. Pause monitoring, then preview all five expressions. Previews do not trigger real reminders or sound.
 7. Power off and wake Pomo. Verify wake leaves monitoring paused.
-8. Open a second tab and check shared state. Reconnect a viewer without replaying sound; disconnect the observation-producing tab and check unavailable state.
+8. Open a second tab and check shared state. Reconnect a viewer without replaying sound; disconnect the observation-producing tab and check the Bored expression.
 
-For a camera demonstration, pause, select Camera, enable and grant permission. Stay visible for the baseline, then leave a well-lit, sufficiently detailed scene for the grace plus absence threshold. Check the real reminder, dismissal/cooldown and return. Test denied permission, owner-tab closure, hidden tabs and interruption; explicitly retry with a fresh session. Physical validation is still needed.
+For a camera demonstration, pause, select Camera, enable and grant permission. Leave a well-lit, sufficiently detailed scene for the uncertainty period plus absence threshold. Check the real reminder, dismissal/cooldown and return. Test denied permission, owner-tab closure, hidden tabs and interruption; explicitly retry with a fresh session. Physical validation is still needed.
 
 The debug panel shows current observation/source/age, absence duration, cooldown, actual state and backend events. Clearing the browser log clears that tab's view only; it does not erase shared backend history.
 
@@ -384,6 +433,7 @@ Discussion updates are shared through commits and pull requests. Teammates must 
 - [x] Add timestamp/session freshness validation and explicitly handle unknown, unavailable and expired observation metadata.
 - [ ] Evaluate the real detector under poor lighting and temporary tracking loss.
 - [x] Define the five backend states and configurable sustained-absence thresholds.
+- [x] Rename the five state and expression identifiers in protocol v8; the visual mapping and reminder rules are unchanged.
 - [x] Connect simulated/producer observation metadata to backend decisions and broadcast the resulting state.
 - [x] Adapt camera observations to the shared reminder contract with baseline, grace and freshness gates; physical webcam validation remains pending.
 - [x] Implement reminder dismissal, cooldown, global pause/resume, soft power and presence recovery.
