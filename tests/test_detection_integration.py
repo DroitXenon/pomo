@@ -73,7 +73,7 @@ class CameraDriver:
         self.arm()
         state = self.frame('absent')
         assert state['reminder']['active'] is False
-        for _ in range(5):
+        for _ in range(8):
             state = self.frame('absent')
         assert state['behavior_state'] == 'surprised'
         assert state['display'] == 'surprised'
@@ -103,13 +103,13 @@ def test_armed_tracking_loss_shows_happy_until_grace_expires():
             assert state['absence_duration_seconds'] == 0
             assert not state['reminder']['active']
         state = driver.frame('absent', advance=0.125)
-        assert state['camera_tracking_status'] == 'absence'
-        assert state['observation']['presence'] == 'absent'
-        assert state['display'] == 'sad'
+        assert state['camera_tracking_status'] == 'possible_absence'
+        assert state['observation']['presence'] == 'uncertain'
+        assert state['display'] == 'happy'
         state = driver.frame('present')
         assert state['display'] == 'happy'
         state = driver.frame('uncertain')
-        assert state['display'] == 'bored' and not state['camera_armed']
+        assert state['display'] == 'happy' and not state['camera_armed']
 
 
 def test_camera_absence_reminder_mute_dismissal_cooldown_return_and_pause():
@@ -145,10 +145,10 @@ def test_camera_absence_reminder_mute_dismissal_cooldown_return_and_pause():
         assert state['display'] == 'happy' and state['reminder']['active'] is False
         assert state['cooldown_remaining_seconds'] > 0
         state = driver.frame('uncertain')
-        assert state['display'] == 'bored' and state['camera_armed'] is False
+        assert state['display'] == 'happy' and state['camera_armed'] is False
         assert state['absence_duration_seconds'] == 0
         state = send(ws, 'set_monitoring', enabled=False)
-        assert state['display'] == 'happy' and state['camera_session'] is None
+        assert state['display'] == 'bored' and state['camera_session'] is None
         assert state['camera_observation']['presence'] == state['observation']['presence'] == 'unavailable'
         assert upload(client, driver.token, driver.sequence).status_code == 409
 
@@ -319,25 +319,22 @@ def test_paused_preview_is_cleared_when_camera_monitoring_starts(expression):
         assert state['camera_session'] is None and state['reminder']['active'] is False
 
 
-def test_initial_no_face_is_unarmed_and_does_not_create_an_absence_reminder():
+def test_initial_no_face_becomes_absent_after_one_second():
     app, clock, detection = harness()
     detection['presence'] = 'absent'
     with TestClient(app) as client, client.websocket_connect('/ws') as ws:
         driver = CameraDriver(client, ws, clock, detection)
-        for index in range(10):
+        for index in range(9):
             state = driver.frame(advance=0 if index == 0 else 0.25)
-            assert state['camera_observation']['presence'] == state['observation']['presence'] == 'uncertain'
+            expected = 'uncertain' if index < 4 else 'absent'
+            assert state['camera_observation']['presence'] == state['observation']['presence'] == expected
             assert state['camera_armed'] is False
-            assert state['reminder']['active'] is False and state['reminder']['id'] == 0
-            assert state['absence_duration_seconds'] == 0
+            assert state['reminder']['active'] is (index == 8)
+            assert state['absence_duration_seconds'] == pytest.approx(max(0, (index - 4) * 0.25))
             assert state['camera_absence_duration_seconds'] == pytest.approx(index * 0.25)
             assert state['camera_tracking_status'] == (
                 'tracking_loss' if index == 0 else 'possible_absence')
-            assert state['display'] == 'bored'
-        state = driver.frame('uncertain')
-        assert state['camera_tracking_status'] == 'uncertain'
-        assert state['absence_duration_seconds'] == 0
-        assert state['camera_absence_duration_seconds'] == 0
+            assert state['display'] == ('happy' if index < 4 else 'sad' if index < 8 else 'surprised')
 
 
 def test_camera_owner_failure_and_retry_then_power_cycle_reject_old_frames():
@@ -360,7 +357,7 @@ def test_camera_owner_failure_and_retry_then_power_cycle_reject_old_frames():
         assert state['camera_session'] is None and state['cooldown_remaining_seconds'] == 0
         assert upload(client, retry_token).status_code == 409
         state = send(ws, 'set_power', enabled=True)
-        assert state['display'] == 'happy' and state['monitoring_enabled'] is False
+        assert state['display'] == 'bored' and state['monitoring_enabled'] is False
         assert state['camera_observation']['presence'] == state['observation']['presence'] == 'unavailable'
 
 

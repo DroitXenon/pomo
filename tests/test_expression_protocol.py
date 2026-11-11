@@ -27,7 +27,7 @@ def test_expression_commands_and_state_transitions():
         peer = Peer()
         await runtime.connect(peer)
         assert peer.messages[-1]['protocol_version'] == 9
-        assert peer.messages[-1]['display'] == 'happy'
+        assert peer.messages[-1]['display'] == 'bored'
 
         async def send(**payload):
             await runtime.dispatch(COMMANDS.validate_python(payload), peer)
@@ -36,7 +36,7 @@ def test_expression_commands_and_state_transitions():
         for expression in ('happy', 'sad', 'surprised', 'bored', 'idle'):
             state = await send(type='preview_display', display=expression)
             assert state['display'] == expression
-            assert state['behavior_state'] == 'happy'
+            assert state['behavior_state'] == 'bored'
             assert not state['reminder']['active']
         for legacy in ('ready', 'distraction', 'reminding', 'unavailable', 'shutdown'):
             with pytest.raises(ValidationError):
@@ -56,7 +56,7 @@ def test_expression_commands_and_state_transitions():
         for _ in range(4):
             state = await observe('absent')
         assert state['display'] == 'surprised' and state['reminder']['active']
-        assert (await observe('uncertain'))['display'] == 'bored'
+        assert (await observe('uncertain'))['display'] == 'happy'
         state = await observe('unavailable')
         assert state['observation']['presence'] == 'unavailable'
         assert state['camera_observation']['presence'] == 'unavailable'
@@ -94,12 +94,12 @@ def test_websocket_protocol_v9_preview_and_legacy_rejection():
                 return json.loads(message['text'])
 
             initial = await receive()
-            assert initial['protocol_version'] == 9 and initial['display'] == 'happy'
+            assert initial['protocol_version'] == 9 and initial['display'] == 'bored'
             assert initial['observation']['presence'] == initial['camera_observation']['presence'] == 'unavailable'
             await inbound.put({'type': 'websocket.receive', 'text': json.dumps(
                 {'type': 'preview_display', 'display': 'sad'})})
             state = await receive()
-            assert state['display'] == 'sad' and state['behavior_state'] == 'happy'
+            assert state['display'] == 'sad' and state['behavior_state'] == 'bored'
             await inbound.put({'type': 'websocket.receive', 'text': json.dumps(
                 {'type': 'preview_display', 'display': 'distraction'})})
             assert (await receive())['type'] == 'error'

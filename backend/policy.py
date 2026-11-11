@@ -21,6 +21,7 @@ class PolicyConfig:
     absence_seconds: float = 5.0
     cooldown_seconds: float = 30.0
     observation_timeout_seconds: float = 3.0
+    uncertainty_seconds: float = 1.0
 
     def __post_init__(self):
         for name, value in asdict(self).items():
@@ -51,12 +52,13 @@ class ReminderEngine:
         self.powered_on = True
         self.monitoring_enabled = False
         self.muted = self._boolean(initially_muted, "initially_muted")
-        self.behavior_state = "happy"
+        self.behavior_state = "bored"
         self._preview = None
         self.camera_status = "unavailable"
         self.observation_session = uuid4().hex
         self._presence = "unavailable"
         self._transient_loss = False
+        self._uncertain_since = None
         self._source = "none"
         self._observed_at = None
         self._received_at = None
@@ -105,6 +107,7 @@ class ReminderEngine:
     def _reset_observations(self):
         self._presence = "unavailable"
         self._transient_loss = False
+        self._uncertain_since = None
         self._source = "none"
         self._observed_at = None
         self._received_at = None
@@ -116,7 +119,7 @@ class ReminderEngine:
     def _resting_state(self):
         if not self.powered_on:
             return "idle"
-        return "bored" if self.monitoring_enabled else "happy"
+        return "bored"
 
     def invalidate_observations(self, reason: str, level: str = "warning"):
         self._clear_reminder(reason)
@@ -202,7 +205,14 @@ class ReminderEngine:
 
         previous_presence, previous_source = self._presence, self._source
         previous_camera = self.camera_status
-        self._presence = presence
+        if presence == "uncertain":
+            if self._uncertain_since is None:
+                self._uncertain_since = now
+            effective_presence = "absent" if now - self._uncertain_since >= self.config.uncertainty_seconds else "uncertain"
+        else:
+            self._uncertain_since = None
+            effective_presence = presence
+        self._presence = effective_presence
         self._transient_loss = transient_loss
         self._source = source
         self._observed_at = float(observed_at)
@@ -214,7 +224,7 @@ class ReminderEngine:
         if (self._presence, source, self.camera_status) != (
                 previous_presence, previous_source, previous_camera):
             self.record("observation_changed", f"{source}: {presence}")
-        if presence == "absent":
+        if effective_presence == "absent":
             if self._absence_started_at is None:
                 self._absence_started_at = now
         else:
@@ -230,9 +240,12 @@ class ReminderEngine:
         if self.camera_status != "available":
             return self._transition("bored", "Detection input unavailable or uncertain")
         if self._presence == "uncertain":
-            if self._transient_loss:
-                return self._transition("happy", "Brief tracking loss within grace period")
-            return self._transition("bored", "Detection input unavailable or uncertain")
+            if self._uncertain_since is not None and now - self._uncertain_since >= self.config.uncertainty_seconds:
+                self._presence = "absent"
+                self._absence_started_at = now
+                self.record("observation_changed", f"{self._source}: absent after sustained uncertainty")
+            else:
+                return self._transition("happy", "Detection input uncertain")
         if self._presence == "present":
             return self._transition("happy", "User present")
         if self._reminder_active:

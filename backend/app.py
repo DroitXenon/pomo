@@ -388,7 +388,7 @@ class Runtime:
         self._last_snapshot = self.snapshot()
 
     def _normalized_presence(self, observation, now):
-        """Require a visible baseline and grace before treating tracking loss as absence."""
+        """Track face visibility and leave sustained uncertainty to the policy."""
         at = observation.observed_at
         if (now - at >= self.behaviour_config.observation_max_age_seconds
                 or (self._last_camera_observed is not None
@@ -424,8 +424,8 @@ class Runtime:
         if at - self._lost_since < self.behaviour_config.tracking_loss_grace_seconds:
             self.camera_tracking_status = "tracking_loss"
             return "uncertain"
-        self.camera_tracking_status = "absence"
-        return "absent"
+        self.camera_tracking_status = "possible_absence"
+        return "uncertain"
 
     async def camera_frame(self, request):
         token = request.headers.get("x-camera-session", "")

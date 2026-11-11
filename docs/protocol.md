@@ -43,8 +43,8 @@ The following example shows the complete shape; instance/session IDs, revision a
   "powered_on": true,
   "monitoring_enabled": false,
   "muted": true,
-  "behavior_state": "happy",
-  "display": "happy",
+  "behavior_state": "bored",
+  "display": "bored",
   "preview_active": false,
   "camera_status": "unavailable",
   "observation_session": "fece9f0ba618451ea17e8ef3ab8dafde",
@@ -104,7 +104,7 @@ The following example shows the complete shape; instance/session IDs, revision a
 | `reminder.active` / `message` | Whether a real visual reminder is active and its supportive text; message is `null` when inactive |
 | `events` | Up to 100 recent backend events in oldest-to-newest order |
 
-Connection status is a client-side transport condition. It must not be interpreted as user absence. A camera can be available while tracking is uncertain; in that case presence is `uncertain` and behaviour is `bored`, except during the armed tracking-loss grace, when behaviour is `happy`.
+Connection status is a client-side transport condition. It must not be interpreted as user absence. A camera can be available while tracking is uncertain; fresh `uncertain` observations show `happy` and become `absent` after the configured uncertainty period (default 1 second).
 
 Additional camera fields are:
 
@@ -159,7 +159,7 @@ be replaced by a synthetic packet while camera mode is selected.
 - Enabling monitoring requires power on. An actual monitoring change clears the preview, input and active reminder, rotates the observation-session token and requires fresh observations.
 - Pausing monitoring returns behaviour to `happy` and preserves any remaining cooldown.
 - `set_power` is a soft power control. Power off enters `idle`, disables monitoring and clears input, preview, active reminder and cooldown. It does not terminate HTTP or WebSocket serving.
-- Power on returns to `happy` with monitoring paused. Repeating an unchanged power or monitoring setting is idempotent at policy level, although an accepted command still receives a new revision.
+- Power on returns to `bored` with monitoring paused. Repeating an unchanged power or monitoring setting is idempotent at policy level, although an accepted command still receives a new revision.
 
 ### Sound and dismissal
 
@@ -217,10 +217,10 @@ With `POMO_DEV_CONTROLS=false`, simulated input selection/observations and both 
 | Absence threshold reached with fresh input and no cooldown | `surprised`; increment reminder ID, show message and start cooldown |
 | Reminder remains active | Keep the same reminder; do not repeatedly trigger cues when its original cooldown ends |
 | Dismissal | Clear the active reminder and begin a full quiet period; continuing absence may retrigger only after cooldown |
-| Fresh `uncertain` | Clear pending duration/reminder and enter `bored`; armed camera tracking loss during its grace instead shows `happy` |
+| Fresh `uncertain` | Clear pending duration/reminder and show `happy`; after 1 second of continuous fresh uncertainty report `absent` and start the absence timer |
 | Fresh `unavailable` | Camera unavailable; clear pending duration/reminder and enter `bored` |
 | Observation timeout or producer disconnect | Clear input and active reminder, rotate the session token and enter `bored` while monitoring |
-| Monitoring pause | Clear input and active reminder, rotate session and show `happy`; retain cooldown |
+| Monitoring pause | Clear input and active reminder, rotate session and show `bored`; retain cooldown |
 | Power off | Show `idle`; reset monitoring, input, reminder and cooldown |
 
 A reminder needs continuing fresh observations, not one old absence event. Producers should send observations more frequently than the configured timeout. The simulator sends selected simulated observations as a heartbeat until monitoring pauses, power turns off, the tab disconnects or the producer selects unavailable input.
@@ -276,7 +276,7 @@ The browser also stops on pagehide or tab hiding. Re-enable explicitly after los
 The startup allowance is 30 seconds; subsequent capture idle timeout is 3 seconds.
 Observation evidence expires sooner (default 1 second), independently of capture.
 Camera unavailability clears pending and active reminders and shows `bored`
-while monitoring remains enabled. Intentional pause returns `happy`.
+while monitoring remains enabled. Intentional pause returns `bored`.
 
 Camera detections retain reason, brightness, blur variance, head pose, normalized
 face box, raw blendshapes and per-eye diagnostics. Images are not part of
@@ -286,15 +286,13 @@ available. Camera diagnostics have a separate reason such as `no_face` so that
 raw non-detection is distinguishable without exposing a different presence.
 
 An armed camera with a briefly missing face reports `uncertain` and displays
-`happy` during the tracking-loss grace, without starting an absence timer. After
-the grace, continuous fresh no-face results become `absent`. Without a baseline,
-no face remains `uncertain` and displays `bored`. Poor lighting, blur and invalid
+`happy` during the tracking-loss grace, without starting an absence timer. Continuous fresh no-face results become `absent` after the uncertainty period. Without a baseline,
+no face remains `uncertain` until the uncertainty period elapses, then becomes `absent`. Poor lighting, blur and invalid
 face landmarks are `uncertain`; unavailable camera input, stale processing and
-stale gaps are `unavailable`. Both clear pending and active reminders and require
-a fresh baseline.
+stale gaps are `unavailable`. Initially both clear pending and active reminders. Fresh uncertainty lasting one second becomes absent; unavailable input stays unavailable.
 
 Any fresh present observation clears an active cue immediately; stable presence
-arms subsequent absence reminders. Stable presence defaults to 0.5 seconds; tracking-loss grace defaults to 1 second.
+establishes the diagnostic baseline. Stable presence defaults to 0.5 seconds; tracking-loss grace defaults to 1 second and affects diagnostics.
 The normalized engine's absence threshold is 5 seconds after qualifying absence
 begins. `camera_absence_duration_seconds` exposes the raw interval before that
 gate, so an empty scene can be diagnosed without arming a reminder. Head direction,
@@ -392,6 +390,7 @@ A backend restart creates a new instance ID, resets reminder/event counters and 
 
 | Environment setting | Default | Constraint |
 | --- | --- | --- |
+| `POMO_UNCERTAINTY_SECONDS` | `1` | Continuous fresh uncertainty before it becomes absent |
 | `POMO_ABSENCE_SECONDS` | `5` | At startup: finite, greater than zero, at most 3600, and at least camera tracking-loss grace |
 | `POMO_REMINDER_COOLDOWN_SECONDS` | `30` | Finite, non-negative |
 | `POMO_OBSERVATION_TIMEOUT_SECONDS` | `3` | Finite, greater than zero |

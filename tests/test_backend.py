@@ -112,7 +112,7 @@ def test_health_static_and_protocol_defaults(rig):
         assert state["powered_on"] is True
         assert state["monitoring_enabled"] is False
         assert state["muted"] is True
-        assert state["display"] == state["behavior_state"] == "happy"
+        assert state["display"] == state["behavior_state"] == "bored"
         assert state["reminder"] == {"active": False, "id": 0, "message": None}
 
 
@@ -172,11 +172,11 @@ def test_previews_are_separate_from_policy_and_real_reminders(rig, display):
         ws.receive_json()
         state = command(ws, "preview_display", display=display)
         assert state["display"] == display
-        assert state["behavior_state"] == "happy" and state["powered_on"] is True
+        assert state["behavior_state"] == "bored" and state["powered_on"] is True
         assert state["preview_active"] is True and state["reminder"]["id"] == 0
         assert not any(e["kind"] == "reminder_triggered" for e in state["events"])
         state = command(ws, "clear_preview")
-        assert state["display"] == "happy" and state["preview_active"] is False
+        assert state["display"] == "bored" and state["preview_active"] is False
         state = command(ws, "set_monitoring", enabled=True)
         revision = state["revision"]
         assert command(ws, "preview_display", display="happy")["type"] == "error"
@@ -300,7 +300,7 @@ def test_cooldown_survives_return_pause_and_unavailable_input(rig):
         assert state["display"] == "happy"
         assert state["cooldown_remaining_seconds"] == pytest.approx(9.9)
         state = command(ws, "set_monitoring", enabled=False)
-        assert state["display"] == "happy"
+        assert state["display"] == "bored"
         assert state["cooldown_remaining_seconds"] == pytest.approx(9.9)
         state = command(ws, "set_monitoring", enabled=True)
         clock.advance(0.1)
@@ -370,7 +370,7 @@ def test_pause_and_soft_power_cycle_require_fresh_session_and_reset_inputs(rig):
         state = trigger_reminder(ws, clock)
         original_session = state["observation_session"]
         state = command(ws, "set_monitoring", enabled=False)
-        assert state["display"] == "happy" and state["reminder"]["active"] is False
+        assert state["display"] == "bored" and state["reminder"]["active"] is False
         assert state["observation_session"] != original_session
         state = command(ws, "set_monitoring", enabled=True)
         assert observe(ws, clock, state, session_id=original_session)["type"] == "error"
@@ -387,7 +387,7 @@ def test_pause_and_soft_power_cycle_require_fresh_session_and_reset_inputs(rig):
             assert command(ws, kind, **fields)["type"] == "error"
             assert without_events(current(client, app)) == without_events(before)
         state = command(ws, "set_power", enabled=True)
-        assert state["display"] == "happy" and state["monitoring_enabled"] is False
+        assert state["display"] == "bored" and state["monitoring_enabled"] is False
         assert state["observation_session"] != active_session
 
 
@@ -502,6 +502,6 @@ def test_new_backend_instance_resets_state_and_tokens():
         state = ws.receive_json()
         assert state["revision"] == 0 and state["powered_on"] is True
         assert state["monitoring_enabled"] is False and state["muted"] is True
-        assert state["display"] == "happy" and state["reminder"]["id"] == 0
+        assert state["display"] == "bored" and state["reminder"]["id"] == 0
         assert state["instance_id"] != original["instance_id"]
         assert state["observation_session"] != original["observation_session"]

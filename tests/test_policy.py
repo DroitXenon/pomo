@@ -57,7 +57,7 @@ def test_initial_state_and_enable_require_fresh_observations(policy):
     initial = engine.snapshot()
     assert initial["powered_on"] is True
     assert initial["monitoring_enabled"] is False
-    assert initial["display"] == "happy"
+    assert initial["display"] == "bored"
     assert initial["muted"] is True
     assert initial["camera_status"] == "unavailable"
     assert initial["observation"]["source"] == "none"
@@ -165,7 +165,7 @@ def test_uncertain_or_unavailable_input_clears_reminder(policy, presence, camera
     clock.advance(0.1)
     observe(engine, clock, presence)
     state = engine.snapshot()
-    assert state["behavior_state"] == "bored"
+    assert state["behavior_state"] == ("happy" if presence == "uncertain" else "bored")
     assert state["camera_status"] == camera_status
     assert state["observation"]["presence"] == presence
     assert state["reminder"]["active"] is False
@@ -184,15 +184,36 @@ def test_transient_loss_keeps_unknown_observation_but_shows_happy_until_expiry(p
     assert state["observation"]["presence"] == "uncertain"
     assert state["behavior_state"] == state["display"] == "happy"
     assert state["absence_duration_seconds"] == 0
-    clock.advance(1)
+    clock.advance(0.999)
     engine.tick()
     assert engine.snapshot()["display"] == "happy"
-    clock.advance(2)
+    clock.advance(2.001)
     engine.tick()
     assert engine.snapshot()["display"] == "bored"
     clock.advance(0.1)
     observe(engine, clock, "uncertain", "camera")
-    assert engine.snapshot()["display"] == "bored"
+    assert engine.snapshot()["display"] == "happy"
+
+
+def test_sustained_uncertainty_becomes_absent_and_can_recover(policy):
+    engine, clock = policy
+    engine.set_monitoring(True)
+    observe(engine, clock, "uncertain")
+    clock.advance(0.999)
+    observe(engine, clock, "uncertain")
+    assert engine.snapshot()["display"] == "happy"
+    clock.advance(0.001)
+    engine.tick()
+    assert engine.snapshot()["observation"]["presence"] == "absent"
+    assert engine.snapshot()["display"] == "sad"
+    for _ in range(5):
+        clock.advance(1)
+        observe(engine, clock, "uncertain")
+    assert engine.snapshot()["display"] == "surprised"
+    clock.advance(0.1)
+    observe(engine, clock, "present")
+    assert engine.snapshot()["display"] == "happy"
+    assert engine.snapshot()["observation"]["presence"] == "present"
 
 
 def test_pause_resets_observations_and_rejects_old_session_on_resume(policy):
@@ -201,7 +222,7 @@ def test_pause_resets_observations_and_rejects_old_session_on_resume(policy):
     original_session = engine.observation_session
     engine.set_monitoring(False)
     paused = engine.snapshot()
-    assert paused["display"] == "happy"
+    assert paused["display"] == "bored"
     assert paused["reminder"]["active"] is False
     assert paused["absence_duration_seconds"] == 0
     assert paused["cooldown_remaining_seconds"] == 30
@@ -230,7 +251,7 @@ def test_soft_shutdown_stops_monitoring_and_wake_is_paused(policy):
         engine.set_monitoring(True)
     engine.set_power(True)
     awake = engine.snapshot()
-    assert awake["display"] == "happy"
+    assert awake["display"] == "bored"
     assert awake["monitoring_enabled"] is False
     assert awake["observation"]["source"] == "none"
     assert awake["reminder"]["id"] == 1
@@ -319,7 +340,7 @@ def test_manual_previews_do_not_change_behaviour_or_trigger_sound(policy, displa
     engine.preview(display)
     state = engine.snapshot()
     assert state["display"] == display
-    assert state["behavior_state"] == "happy"
+    assert state["behavior_state"] == "bored"
     assert state["preview_active"] is True
     assert state["reminder"]["id"] == 0
     assert state["powered_on"] is True

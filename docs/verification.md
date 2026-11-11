@@ -294,3 +294,15 @@ On the `fix/camera` working tree with the existing Python 3.13 `pomo` environmen
 - The actual simulator JavaScript was exercised in a V8 mocked DOM/WebSocket harness with ten synthetic camera scenarios and disconnection. Checks covered face presence, armed/unarmed tracking loss, absence and active reminder, low light and blur, stale data, camera startup and unavailable input.
 - V8 compiled `simulator/app.js`, `simulator/camera.js` and `tests/test_simulator.cjs`. HTML checks confirmed that the live description follows the camera status outside collapsed details and retains `role=status`; `git diff --check` passed.
 - Node.js is not installed, so the repository's Node test commands and `node --check` were not run. A browser, narrow layout and physical camera were not tested.
+
+### 2026-11-11: Sustained uncertainty policy
+
+Synthetic clock tests verify that fresh uncertain input displays happy, becomes absent after five seconds, can trigger the normal absence reminder, and clears on present input. `tests/test_policy.py`, `tests/test_perception.py`, `tests/test_eyes.py`, `tests/test_config.py`, and `tests/test_behaviour.py`: 179 passed in the `pomo` environment. The HTTP/WebSocket suite stalled while entering Starlette TestClient before a test ran; browser, Node.js (not installed), and physical camera validation were not completed.
+
+### 2026-11-11: Expression while monitoring is paused
+
+Synthetic policy and ASGI/WebSocket expression checks cover startup, pause, wake and manual previews. The policy, expression protocol, perception, eyes, configuration and historical behaviour suites passed: 181 tests. Browser and physical-camera checks were not run.
+
+### 2026-11-11: One-second uncertainty threshold
+
+Fake-clock policy checks cover the 0.999/1.000-second boundary, subsequent reminder timing, recovery and configuration overrides. The policy, expression protocol, perception, eyes, configuration and historical behaviour suites passed: 188 tests. Camera integration, browser and physical-camera checks were not run; the earlier TestClient startup stall remains unresolved.

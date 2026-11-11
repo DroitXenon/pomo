@@ -134,5 +134,6 @@ class Settings:
                 absence_seconds=_number(environ, "POMO_ABSENCE_SECONDS", "5"),
                 cooldown_seconds=_number(environ, "POMO_REMINDER_COOLDOWN_SECONDS", "30"),
                 observation_timeout_seconds=_number(environ, "POMO_OBSERVATION_TIMEOUT_SECONDS", "3"),
+                uncertainty_seconds=_number(environ, "POMO_UNCERTAINTY_SECONDS", "1"),
             ),
         )
