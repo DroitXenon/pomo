@@ -57,31 +57,59 @@ class CameraDriver:
         result = upload(self.client, self.token, self.sequence)
         assert result.status_code == 200, result.text
         self.sequence += 1
-        return self.ws.receive_json()
+        state = self.ws.receive_json()
+        assert state['camera_observation']['presence'] == state['observation']['presence']
+        return state
 
     def arm(self):
         state = self.frame('present', advance=0)
         assert state['camera_observation']['presence'] == 'present'
         state = self.frame('present')
         assert state['camera_armed'] is True
-        assert state['behavior_state'] == 'ready'
+        assert state['behavior_state'] == 'happy'
         return state
 
     def remind(self):
         self.arm()
-        state = self.frame('not_detected')
+        state = self.frame('absent')
         assert state['reminder']['active'] is False
-        for _ in range(5):
-            state = self.frame('not_detected')
-        assert state['behavior_state'] == 'reminding'
-        assert state['display'] == 'reminding'
+        for _ in range(8):
+            state = self.frame('absent')
+        assert state['behavior_state'] == 'surprised'
+        assert state['display'] == 'surprised'
         assert state['reminder']['active'] is True
         return state
 
 
 def send(ws, kind, **fields):
     ws.send_json({'type': kind, **fields})
-    return ws.receive_json()
+    state = ws.receive_json()
+    if state['type'] == 'state':
+        assert state['camera_observation']['presence'] == state['observation']['presence']
+    return state
+
+
+def test_armed_tracking_loss_shows_happy_until_grace_expires():
+    app, clock, detection = harness()
+    with TestClient(app) as client, client.websocket_connect('/ws') as ws:
+        driver = CameraDriver(client, ws, clock, detection)
+        driver.arm()
+        for advance in (0.25, 0.125):
+            state = driver.frame('absent', advance=advance)
+            assert state['camera_tracking_status'] == 'tracking_loss'
+            assert state['camera_observation']['presence'] == state['observation']['presence']
+            assert state['observation']['presence'] == 'uncertain'
+            assert state['behavior_state'] == state['display'] == 'happy'
+            assert state['absence_duration_seconds'] == 0
+            assert not state['reminder']['active']
+        state = driver.frame('absent', advance=0.125)
+        assert state['camera_tracking_status'] == 'possible_absence'
+        assert state['observation']['presence'] == 'uncertain'
+        assert state['display'] == 'happy'
+        state = driver.frame('present')
+        assert state['display'] == 'happy'
+        state = driver.frame('uncertain')
+        assert state['display'] == 'happy' and not state['camera_armed']
 
 
 def test_camera_absence_reminder_mute_dismissal_cooldown_return_and_pause():
@@ -91,7 +119,7 @@ def test_camera_absence_reminder_mute_dismissal_cooldown_return_and_pause():
         state = driver.remind()
         assert state['observation']['presence'] == 'absent'
         assert state['observation']['source'] == 'camera'
-        assert state['camera_observation']['presence'] == 'not_detected'
+        assert state['camera_observation']['presence'] == state['observation']['presence']
         reminder_id = state['reminder']['id']
         cue_ids = [e['id'] for e in state['events'] if e['kind'] == 'reminder_triggered']
         assert len(cue_ids) == 1
@@ -100,28 +128,28 @@ def test_camera_absence_reminder_mute_dismissal_cooldown_return_and_pause():
         state = send(ws, 'set_muted', muted=True)
         assert state['muted'] is True and state['reminder']['id'] == reminder_id
         for _ in range(12):
-            state = driver.frame('not_detected')
+            state = driver.frame('absent')
         assert state['reminder']['id'] == reminder_id
         state = send(ws, 'dismiss_reminder', reminder_id=reminder_id)
-        assert state['display'] == 'distraction'
+        assert state['display'] == 'sad'
         assert state['reminder']['active'] is False
         assert state['cooldown_remaining_seconds'] == 2
         for _ in range(7):
-            state = driver.frame('not_detected')
+            state = driver.frame('absent')
             assert state['reminder']['active'] is False
-        state = driver.frame('not_detected')
+        state = driver.frame('absent')
         assert state['reminder']['id'] == reminder_id + 1
         assert send(ws, 'dismiss_reminder', reminder_id=reminder_id)['type'] == 'error'
         driver.frame('present')
         state = driver.frame('present')
-        assert state['display'] == 'ready' and state['reminder']['active'] is False
+        assert state['display'] == 'happy' and state['reminder']['active'] is False
         assert state['cooldown_remaining_seconds'] > 0
-        state = driver.frame('unknown')
-        assert state['display'] == 'unavailable' and state['camera_armed'] is False
+        state = driver.frame('uncertain')
+        assert state['display'] == 'happy' and state['camera_armed'] is False
         assert state['absence_duration_seconds'] == 0
         state = send(ws, 'set_monitoring', enabled=False)
-        assert state['display'] == 'ready' and state['camera_session'] is None
-        assert state['camera_observation'] is None
+        assert state['display'] == 'bored' and state['camera_session'] is None
+        assert state['camera_observation']['presence'] == state['observation']['presence'] == 'unavailable'
         assert upload(client, driver.token, driver.sequence).status_code == 409
 
 
@@ -138,8 +166,8 @@ def test_camera_observation_stales_before_transport_session_timeout():
         assert state['monitoring_enabled'] is True
         assert state['camera_tracking_status'] == 'stale'
         assert state['camera_armed'] is False
-        assert state['camera_observation'] is None
-        assert state['behavior_state'] == 'unavailable'
+        assert state['camera_observation']['presence'] == state['observation']['presence'] == 'unavailable'
+        assert state['behavior_state'] == 'bored'
         assert state['reminder']['active'] is False
         assert state['camera_session'] == driver.token
         assert state['observation_session'] != observation_token
@@ -160,11 +188,31 @@ def test_late_inference_is_unknown_even_when_frame_transport_succeeds():
         assert upload(client, token).status_code == 200
         state = ws.receive_json()
         assert state['camera_capture_status'] == 'available'
-        assert state['camera_observation']['presence'] == 'unknown'
+        assert state['camera_observation']['presence'] == 'unavailable'
         assert state['camera_observation']['reason'] == 'stale'
-        assert state['observation']['presence'] == 'unknown'
+        assert state['observation']['presence'] == 'unavailable'
         assert state['head_direction'] == 'unknown' and state['camera_armed'] is False
         assert state['reminder']['active'] is False
+
+
+def test_missing_inference_result_is_unavailable_even_with_active_capture():
+    class MissingObservationProcessor(DecodeProcessor):
+        def process(self, encoded):
+            result = super().process(encoded)
+            result.pop('observation')
+            return result
+
+    app = create_app(processor_factory=MissingObservationProcessor, run_ticker=False)
+    with TestClient(app) as client, client.websocket_connect('/ws') as ws:
+        token = start(ws)
+        assert upload(client, token).status_code == 200
+        state = ws.receive_json()
+        assert state['camera_capture_status'] == 'available'
+        assert state['camera_tracking_status'] == 'unavailable'
+        assert state['camera_observation']['presence'] == state['observation']['presence'] == 'unavailable'
+        assert state['camera_observation']['reason'] == 'missing_result'
+        assert state['display'] == 'bored'
+        assert not state['reminder']['active']
 
 
 def test_rejected_duplicate_camera_timestamp_rolls_back_tracking_and_diagnostics():
@@ -191,7 +239,7 @@ def test_rejected_duplicate_camera_timestamp_rolls_back_tracking_and_diagnostics
         before = client.portal.call(runtime.snapshot)
         adapter_before = (runtime._present_since, runtime._lost_since,
                           runtime._last_camera_observed, runtime.head.direction)
-        detection['presence'] = 'unknown'
+        detection['presence'] = 'uncertain'
         assert upload(client, token, 1).status_code == 409
         assert client.portal.call(runtime.snapshot) == before
         assert (runtime._present_since, runtime._lost_since,
@@ -223,7 +271,7 @@ def test_eye_and_blendshape_diagnostics_never_drive_absence_or_reminders():
         for _ in range(48):
             state = driver.frame('present')
             assert state['reminder']['active'] is False
-            assert state['display'] == 'ready'
+            assert state['display'] == 'happy'
             assert state['absence_duration_seconds'] == 0
         raw = state['camera_observation']
         assert raw['eye_movement']['eyeLeft']['direction'] == 'left'
@@ -249,7 +297,7 @@ def test_closed_eye_label_and_raw_blink_score_reach_clients():
         assert state['reminder']['active'] is False
 
 
-@pytest.mark.parametrize('expression', ['ready', 'shutdown', 'distraction', 'reminding', 'unavailable'])
+@pytest.mark.parametrize('expression', ['happy', 'idle', 'sad', 'surprised', 'bored'])
 def test_paused_preview_is_cleared_when_camera_monitoring_starts(expression):
     app, clock, detection = harness()
     with TestClient(app) as client, client.websocket_connect('/ws') as ws:
@@ -259,36 +307,34 @@ def test_paused_preview_is_cleared_when_camera_monitoring_starts(expression):
         assert state['reminder']['id'] == 0
         state = send(ws, 'set_monitoring', enabled=True)
         token = state['camera_session']
-        assert state['preview_active'] is False and state['display'] == 'unavailable'
+        assert state['preview_active'] is False and state['display'] == 'bored'
         assert send(ws, 'preview_display', display=expression)['type'] == 'error'
         assert upload(client, token).status_code == 200
         state = ws.receive_json()
         assert state['reminder']['id'] == 0 and state['preview_active'] is False
         state = send(ws, 'camera_failed')
         assert state['camera_capture_status'] == 'unavailable'
-        assert state['monitoring_enabled'] is True and state['display'] == 'unavailable'
+        assert state['camera_observation']['presence'] == state['observation']['presence'] == 'unavailable'
+        assert state['monitoring_enabled'] is True and state['display'] == 'bored'
         assert state['camera_session'] is None and state['reminder']['active'] is False
 
 
-def test_initial_no_face_is_unarmed_and_does_not_create_an_absence_reminder():
+def test_initial_no_face_becomes_absent_after_one_second():
     app, clock, detection = harness()
-    detection['presence'] = 'not_detected'
+    detection['presence'] = 'absent'
     with TestClient(app) as client, client.websocket_connect('/ws') as ws:
         driver = CameraDriver(client, ws, clock, detection)
-        for index in range(10):
+        for index in range(9):
             state = driver.frame(advance=0 if index == 0 else 0.25)
-            assert state['camera_observation']['presence'] == 'not_detected'
+            expected = 'uncertain' if index < 4 else 'absent'
+            assert state['camera_observation']['presence'] == state['observation']['presence'] == expected
             assert state['camera_armed'] is False
-            assert state['reminder']['active'] is False and state['reminder']['id'] == 0
-            assert state['absence_duration_seconds'] == 0
+            assert state['reminder']['active'] is (index == 8)
+            assert state['absence_duration_seconds'] == pytest.approx(max(0, (index - 4) * 0.25))
             assert state['camera_absence_duration_seconds'] == pytest.approx(index * 0.25)
             assert state['camera_tracking_status'] == (
                 'tracking_loss' if index == 0 else 'possible_absence')
-            assert state['display'] == 'unavailable'
-        state = driver.frame('unknown')
-        assert state['camera_tracking_status'] == 'uncertain'
-        assert state['absence_duration_seconds'] == 0
-        assert state['camera_absence_duration_seconds'] == 0
+            assert state['display'] == ('happy' if index < 4 else 'sad' if index < 8 else 'surprised')
 
 
 def test_camera_owner_failure_and_retry_then_power_cycle_reject_old_frames():
@@ -298,7 +344,7 @@ def test_camera_owner_failure_and_retry_then_power_cycle_reject_old_frames():
         active = driver.remind()
         old_observation_session = active['observation_session']
         state = send(ws, 'camera_failed')
-        assert state['monitoring_enabled'] is True and state['display'] == 'unavailable'
+        assert state['monitoring_enabled'] is True and state['display'] == 'bored'
         assert state['camera_session'] is None and state['reminder']['active'] is False
         assert state['observation_session'] != old_observation_session
         assert state['cooldown_remaining_seconds'] > 0
@@ -307,12 +353,12 @@ def test_camera_owner_failure_and_retry_then_power_cycle_reject_old_frames():
         retry_token = state['camera_session']
         assert retry_token and retry_token != driver.token
         state = send(ws, 'set_power', enabled=False)
-        assert state['display'] == 'shutdown' and state['monitoring_enabled'] is False
+        assert state['display'] == 'idle' and state['monitoring_enabled'] is False
         assert state['camera_session'] is None and state['cooldown_remaining_seconds'] == 0
         assert upload(client, retry_token).status_code == 409
         state = send(ws, 'set_power', enabled=True)
-        assert state['display'] == 'ready' and state['monitoring_enabled'] is False
-        assert state['camera_observation'] is None
+        assert state['display'] == 'bored' and state['monitoring_enabled'] is False
+        assert state['camera_observation']['presence'] == state['observation']['presence'] == 'unavailable'
 
 
 def test_camera_viewer_reconnect_preserves_active_reminder_but_owner_disconnect_clears_it():
@@ -329,6 +375,6 @@ def test_camera_viewer_reconnect_preserves_active_reminder_but_owner_disconnect_
                     if e['kind'] == 'reminder_triggered'] == cue_ids
             owner.close()
             failed = viewer.receive_json()
-            assert failed['display'] == 'unavailable' and failed['monitoring_enabled'] is True
+            assert failed['display'] == 'bored' and failed['monitoring_enabled'] is True
             assert failed['reminder']['active'] is False and failed['camera_session'] is None
             assert upload(client, driver.token, driver.sequence).status_code == 409

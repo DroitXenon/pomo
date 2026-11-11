@@ -57,19 +57,19 @@ def test_initial_state_and_enable_require_fresh_observations(policy):
     initial = engine.snapshot()
     assert initial["powered_on"] is True
     assert initial["monitoring_enabled"] is False
-    assert initial["display"] == "ready"
+    assert initial["display"] == "bored"
     assert initial["muted"] is True
     assert initial["camera_status"] == "unavailable"
     assert initial["observation"]["source"] == "none"
     engine.set_monitoring(True)
     current = engine.snapshot()
-    assert current["behavior_state"] == "unavailable"
+    assert current["behavior_state"] == "bored"
     assert current["observation_session"] != initial["observation_session"]
     clock.advance(100)
     engine.tick()
     assert engine.snapshot()["reminder"]["id"] == 0
     observe(engine, clock, "present")
-    assert engine.snapshot()["behavior_state"] == "ready"
+    assert engine.snapshot()["behavior_state"] == "happy"
 
 
 def test_reminder_triggers_at_sustained_threshold_with_fresh_heartbeats(policy):
@@ -78,12 +78,12 @@ def test_reminder_triggers_at_sustained_threshold_with_fresh_heartbeats(policy):
     continue_absence(engine, clock, 4)
     clock.advance(0.999)
     engine.tick()
-    assert engine.snapshot()["behavior_state"] == "distraction"
+    assert engine.snapshot()["behavior_state"] == "sad"
     assert engine.snapshot()["reminder"]["active"] is False
     clock.advance(0.001)
     assert engine.tick() is True
     state = engine.snapshot()
-    assert state["behavior_state"] == "reminding"
+    assert state["behavior_state"] == "surprised"
     assert state["reminder"] == {
         "active": True, "id": 1, "message": "Ready to return to your study session?"}
     assert state["absence_duration_seconds"] == 5
@@ -100,7 +100,7 @@ def test_brief_absence_does_not_accumulate_across_present_observations(policy):
     clock.advance(0.1)
     observe(engine, clock)
     continue_absence(engine, clock, 4)
-    assert engine.snapshot()["behavior_state"] == "distraction"
+    assert engine.snapshot()["behavior_state"] == "sad"
     assert engine.snapshot()["reminder"]["id"] == 0
 
 
@@ -117,7 +117,7 @@ def test_dismissal_preserves_cooldown_and_continued_absence_can_retrigger(policy
     trigger_reminder(engine, clock)
     engine.dismiss(1)
     dismissed = engine.snapshot()
-    assert dismissed["behavior_state"] == "distraction"
+    assert dismissed["behavior_state"] == "sad"
     assert dismissed["reminder"]["active"] is False
     assert dismissed["cooldown_remaining_seconds"] == 30
     continue_absence(engine, clock, 29.9)
@@ -134,7 +134,7 @@ def test_returning_user_clears_reminder_and_pending_duration(policy):
     clock.advance(0.1)
     observe(engine, clock, "present")
     state = engine.snapshot()
-    assert state["display"] == "ready"
+    assert state["display"] == "happy"
     assert state["reminder"]["active"] is False
     assert state["absence_duration_seconds"] == 0
     assert state["cooldown_remaining_seconds"] == pytest.approx(29.9)
@@ -158,21 +158,62 @@ def test_dismissal_after_old_cooldown_expired_starts_full_quiet_period(policy):
 
 
 @pytest.mark.parametrize("presence,camera_status", [
-    ("unknown", "available"), ("unavailable", "unavailable")])
+    ("uncertain", "available"), ("unavailable", "unavailable")])
 def test_uncertain_or_unavailable_input_clears_reminder(policy, presence, camera_status):
     engine, clock = policy
     trigger_reminder(engine, clock)
     clock.advance(0.1)
     observe(engine, clock, presence)
     state = engine.snapshot()
-    assert state["behavior_state"] == "unavailable"
+    assert state["behavior_state"] == ("happy" if presence == "uncertain" else "bored")
     assert state["camera_status"] == camera_status
-    assert state["observation"]["presence"] == "unknown"
+    assert state["observation"]["presence"] == presence
     assert state["reminder"]["active"] is False
     assert state["absence_duration_seconds"] == 0
     clock.advance(100)
     engine.tick()
     assert engine.snapshot()["reminder"]["id"] == 1
+
+
+def test_transient_loss_keeps_unknown_observation_but_shows_happy_until_expiry(policy):
+    engine, clock = policy
+    engine.set_monitoring(True)
+    engine.observe("uncertain", "camera", clock.wall(), engine.observation_session,
+                   transient_loss=True)
+    state = engine.snapshot()
+    assert state["observation"]["presence"] == "uncertain"
+    assert state["behavior_state"] == state["display"] == "happy"
+    assert state["absence_duration_seconds"] == 0
+    clock.advance(0.999)
+    engine.tick()
+    assert engine.snapshot()["display"] == "happy"
+    clock.advance(2.001)
+    engine.tick()
+    assert engine.snapshot()["display"] == "bored"
+    clock.advance(0.1)
+    observe(engine, clock, "uncertain", "camera")
+    assert engine.snapshot()["display"] == "happy"
+
+
+def test_sustained_uncertainty_becomes_absent_and_can_recover(policy):
+    engine, clock = policy
+    engine.set_monitoring(True)
+    observe(engine, clock, "uncertain")
+    clock.advance(0.999)
+    observe(engine, clock, "uncertain")
+    assert engine.snapshot()["display"] == "happy"
+    clock.advance(0.001)
+    engine.tick()
+    assert engine.snapshot()["observation"]["presence"] == "absent"
+    assert engine.snapshot()["display"] == "sad"
+    for _ in range(5):
+        clock.advance(1)
+        observe(engine, clock, "uncertain")
+    assert engine.snapshot()["display"] == "surprised"
+    clock.advance(0.1)
+    observe(engine, clock, "present")
+    assert engine.snapshot()["display"] == "happy"
+    assert engine.snapshot()["observation"]["presence"] == "present"
 
 
 def test_pause_resets_observations_and_rejects_old_session_on_resume(policy):
@@ -181,14 +222,14 @@ def test_pause_resets_observations_and_rejects_old_session_on_resume(policy):
     original_session = engine.observation_session
     engine.set_monitoring(False)
     paused = engine.snapshot()
-    assert paused["display"] == "ready"
+    assert paused["display"] == "bored"
     assert paused["reminder"]["active"] is False
     assert paused["absence_duration_seconds"] == 0
     assert paused["cooldown_remaining_seconds"] == 30
     with pytest.raises(ValueError, match="monitoring enabled"):
         observe(engine, clock)
     engine.set_monitoring(True)
-    assert engine.snapshot()["display"] == "unavailable"
+    assert engine.snapshot()["display"] == "bored"
     clock.advance(0.1)
     with pytest.raises(ValueError, match="session"):
         engine.observe("absent", "simulated", clock.wall(), original_session)
@@ -201,7 +242,7 @@ def test_soft_shutdown_stops_monitoring_and_wake_is_paused(policy):
     trigger_reminder(engine, clock)
     engine.set_power(False)
     off = engine.snapshot()
-    assert off["behavior_state"] == "shutdown"
+    assert off["behavior_state"] == "idle"
     assert off["powered_on"] is False
     assert off["monitoring_enabled"] is False
     assert off["reminder"]["active"] is False
@@ -210,7 +251,7 @@ def test_soft_shutdown_stops_monitoring_and_wake_is_paused(policy):
         engine.set_monitoring(True)
     engine.set_power(True)
     awake = engine.snapshot()
-    assert awake["display"] == "ready"
+    assert awake["display"] == "bored"
     assert awake["monitoring_enabled"] is False
     assert awake["observation"]["source"] == "none"
     assert awake["reminder"]["id"] == 1
@@ -223,11 +264,11 @@ def test_expiry_accounts_for_age_already_present_at_receipt(policy):
     engine.observe("absent", "camera", clock.wall() - 2.5, old_session)
     clock.advance(0.49)
     assert engine.tick() is False
-    assert engine.snapshot()["display"] == "distraction"
+    assert engine.snapshot()["display"] == "sad"
     clock.advance(0.01)
     assert engine.tick() is True
     expired = engine.snapshot()
-    assert expired["display"] == "unavailable"
+    assert expired["display"] == "bored"
     assert expired["observation_session"] != old_session
     assert expired["absence_duration_seconds"] == 0
     assert expired["observation"]["source"] == "none"
@@ -242,7 +283,7 @@ def test_disconnect_invalidates_buffered_observations_and_active_reminder(policy
     trigger_reminder(engine, clock)
     original_session = engine.observation_session
     engine.invalidate_observations("Observation producer disconnected")
-    assert engine.snapshot()["display"] == "unavailable"
+    assert engine.snapshot()["display"] == "bored"
     assert engine.snapshot()["reminder"]["active"] is False
     clock.advance(0.1)
     with pytest.raises(ValueError, match="session"):
@@ -255,13 +296,13 @@ def test_expiry_clears_an_active_reminder_and_preserves_cooldown(policy):
     clock.advance(3)
     engine.tick()
     expired = engine.snapshot()
-    assert expired["behavior_state"] == "unavailable"
+    assert expired["behavior_state"] == "bored"
     assert expired["reminder"]["active"] is False
     assert expired["cooldown_remaining_seconds"] == 27
     assert expired["absence_duration_seconds"] == 0
 
 
-@pytest.mark.parametrize("initial_presence", ["absent", "unknown"])
+@pytest.mark.parametrize("initial_presence", ["absent", "uncertain"])
 def test_expired_generation_rejects_before_timer_and_requires_new_session(policy, initial_presence):
     engine, clock = policy
     engine.set_monitoring(True)
@@ -277,7 +318,7 @@ def test_expired_generation_rejects_before_timer_and_requires_new_session(policy
     assert engine.tick() is True
     refreshed = engine.snapshot()
     assert refreshed["observation_session"] != original_session
-    assert refreshed["behavior_state"] == "unavailable"
+    assert refreshed["behavior_state"] == "bored"
     assert refreshed["absence_duration_seconds"] == 0
     assert engine.tick() is False
     assert engine.snapshot() == refreshed
@@ -299,7 +340,7 @@ def test_manual_previews_do_not_change_behaviour_or_trigger_sound(policy, displa
     engine.preview(display)
     state = engine.snapshot()
     assert state["display"] == display
-    assert state["behavior_state"] == "ready"
+    assert state["behavior_state"] == "bored"
     assert state["preview_active"] is True
     assert state["reminder"]["id"] == 0
     assert state["powered_on"] is True
@@ -362,7 +403,7 @@ def test_wall_clock_change_does_not_distort_monotonic_expiry(policy):
     assert engine.snapshot()["observation"]["age_seconds"] == 2
     clock.advance(1)
     assert engine.tick() is True
-    assert engine.snapshot()["display"] == "unavailable"
+    assert engine.snapshot()["display"] == "bored"
 
 
 def test_debug_events_are_bounded_and_snapshots_cannot_mutate_them(policy):

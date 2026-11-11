@@ -85,7 +85,7 @@ class FacePerception:
                   'overexposed' if brightness > self.config.max_brightness else
                   'low_detail_or_blur' if blur < self.config.min_blur_variance else None)
         if reason:
-            return dict(presence='unknown', reason=reason, **metrics)
+            return dict(presence='uncertain', reason=reason, **metrics)
         import mediapipe as mp
         self.timestamp_ms = max(self.timestamp_ms + 1, int(time.monotonic() * 1000))
         result = self.model.detect_for_video(
@@ -101,11 +101,11 @@ class FacePerception:
     @staticmethod
     def observation_from_result(result, metrics):
         if not result.face_landmarks:
-            return dict(presence='not_detected', reason='no_face', **metrics)
+            return dict(presence='absent', reason='no_face', **metrics)
         landmarks = result.face_landmarks[0]
         xs, ys = [point.x for point in landmarks], [point.y for point in landmarks]
         if not xs or not np.isfinite(xs + ys).all():
-            return dict(presence='unknown', reason='invalid_landmarks', **metrics)
+            return dict(presence='uncertain', reason='invalid_landmarks', **metrics)
         box = tuple(float(np.clip(v, 0, 1)) for v in (min(xs), min(ys), max(xs), max(ys)))
         matrices = result.facial_transformation_matrixes
         pose = pose_from_matrix(matrices[0]) if len(matrices) else None

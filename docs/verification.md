@@ -292,3 +292,46 @@ separate `firmware/camera-test` project now builds a local camera preview.
 - This camera sketch was not uploaded or tested on physical hardware. Camera
   capture, frame colors, orientation and stability remain to be verified on the
   device. It does not record frames or connect to the Pomo backend.
+
+The user later reported that the camera preview works on the CoreS3. Colors,
+orientation and stability were not separately assessed in this merge.
+
+## Expression identifier rename — 11 November 2026
+
+On the `fix/camera` working tree with the existing Python 3.13 `pomo` environment:
+
+- `conda run --no-capture-output --name pomo python -m pytest -q tests/test_policy.py tests/test_behaviour.py tests/test_config.py tests/test_eyes.py tests/test_perception.py`: 177 passed.
+- `conda run --no-capture-output --name pomo python -m pytest -q` outside the sandbox: 268 passed, with the existing Starlette/HTTPX deprecation warning. Protocol coverage includes v8 commands and snapshots, all five previews, legacy-name rejection and observation-driven transitions without a physical camera.
+- Both simulator JavaScript files compiled with V8's `Function` constructor; HTML preview/observation values and CSS selectors were checked, and `git diff --check` passed. Node.js is not installed, so the Node test suites and `node --check` were not run.
+- Inside the sandbox Starlette's `TestClient` hung during initialization, including for an empty FastAPI app. Running the suite outside the sandbox completed successfully.
+- A real browser, camera, narrow layout and audible output were not tested.
+
+## Happy expression during camera tracking grace — 11 November 2026
+
+- `conda run --no-capture-output --name pomo python -m pytest -q` outside the sandbox: 270 passed, with the existing Starlette/HTTPX deprecation warning.
+- Synthetic camera frames and a controllable clock cover an armed face, tracking loss before and at the grace boundary, absence, return and uncertain input. The policy test covers observation freshness expiry. Raw `not_detected` and normalized `unknown` are retained during grace.
+- `git diff --check` passed. A physical webcam and browser rendering were not tested.
+
+## Visible camera detection description — 11 November 2026
+
+- The actual simulator JavaScript was exercised in a V8 mocked DOM/WebSocket harness with ten synthetic camera scenarios and disconnection. Checks covered face presence, armed/unarmed tracking loss, absence and active reminder, low light and blur, stale data, camera startup and unavailable input.
+- V8 compiled `simulator/app.js`, `simulator/camera.js` and `tests/test_simulator.cjs`. HTML checks confirmed that the live description follows the camera status outside collapsed details and retains `role=status`; `git diff --check` passed.
+- Node.js is not installed, so the repository's Node test commands and `node --check` were not run. A browser, narrow layout and physical camera were not tested.
+
+### 2026-11-11: Sustained uncertainty policy
+
+Synthetic clock tests verify that fresh uncertain input displays happy, becomes absent after five seconds, can trigger the normal absence reminder, and clears on present input. `tests/test_policy.py`, `tests/test_perception.py`, `tests/test_eyes.py`, `tests/test_config.py`, and `tests/test_behaviour.py`: 179 passed in the `pomo` environment. The HTTP/WebSocket suite stalled while entering Starlette TestClient before a test ran; browser, Node.js (not installed), and physical camera validation were not completed.
+
+### 2026-11-11: Expression while monitoring is paused
+
+Synthetic policy and ASGI/WebSocket expression checks cover startup, pause, wake and manual previews. The policy, expression protocol, perception, eyes, configuration and historical behaviour suites passed: 181 tests. Browser and physical-camera checks were not run.
+
+### 2026-11-11: One-second uncertainty threshold
+
+Fake-clock policy checks cover the 0.999/1.000-second boundary, subsequent reminder timing, recovery and configuration overrides. The policy, expression protocol, perception, eyes, configuration and historical behaviour suites passed: 188 tests. Camera integration, browser and physical-camera checks were not run; the earlier TestClient startup stall remains unresolved.
+
+## Merge main into feature/stack — 11 November 2026
+
+- `PYTHONDONTWRITEBYTECODE=1 conda run --no-capture-output --name pomo python -m pytest -q -p no:cacheprovider -o faulthandler_timeout=20`: 279 passed, with the existing Starlette/HTTPX deprecation warning.
+- `node --test tests/test_simulator.js tests/test_simulator.cjs tests/test_camera_client.cjs`: 42 passed. `node --check simulator/app.js` and `node --check simulator/camera.js` also passed.
+- Browser rendering and physical hardware were not tested during this merge. The user previously reported the CoreS3 camera preview works.

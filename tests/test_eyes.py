@@ -99,7 +99,7 @@ def test_missing_or_invalid_geometry_is_unknown():
 
 
 def test_unknown_observation_has_no_stale_iris_direction():
-    observation = Observation(observed_at=1, processed_at=1, presence='unknown')
+    observation = Observation(observed_at=1, processed_at=1, presence='uncertain')
     assert observation.eye_movement == EyeMovement()
     with pytest.raises(ValueError):
         Observation(observed_at=1, processed_at=1, presence='present',

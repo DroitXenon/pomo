@@ -2,13 +2,13 @@
 
 const $ = (id) => document.getElementById(id);
 const displayLabels = {
-  ready: "Ready",
-  shutdown: "Shutdown",
-  distraction: "Possible distraction",
-  reminding: "Reminder",
-  unavailable: "Detection unavailable"
+  happy: "Happy",
+  idle: "Idle",
+  sad: "Sad",
+  surprised: "Surprised",
+  bored: "Bored"
 };
-const presenceLabels = {present: "Present", absent: "Absent", unknown: "Uncertain"};
+const presenceLabels = {present: "Present", absent: "Absent", uncertain: "Uncertain", unavailable: "Unavailable"};
 const sourceLabels = {none: "None", simulated: "Simulated", camera: "Camera"};
 let socket, retryTimer, connectTimer, inputTimer;
 let attempts = 0, stopped = false, connected = false, protocolBlocked = false;
@@ -48,7 +48,7 @@ function validSnapshot(next) {
   const cameraSettings = object(next?.camera_settings) &&
     ["width", "height", "fps", "jpeg_quality", "max_bytes", "timeout_seconds"].every((key) => positive(next.camera_settings[key])) &&
     next.camera_settings.jpeg_quality <= 1;
-  return object(next) && next.protocol_version === 7 &&
+  return object(next) && next.protocol_version === 9 &&
     typeof next.instance_id === "string" && next.instance_id.length > 0 &&
     Number.isSafeInteger(next.revision) && next.revision >= 0 &&
     ["dev_controls", "powered_on", "monitoring_enabled", "muted"].every((key) => typeof next[key] === "boolean") &&
@@ -62,6 +62,7 @@ function validSnapshot(next) {
     typeof next.observation_session === "string" && next.observation_session.length > 0 &&
     finite(next.absence_duration_seconds) && finite(next.cooldown_remaining_seconds) &&
     object(next.observation) && Object.hasOwn(presenceLabels, next.observation.presence) &&
+    object(next.camera_observation) && next.camera_observation.presence === next.observation.presence &&
     Object.hasOwn(sourceLabels, next.observation.source) &&
     (next.observation.age_seconds === null || finite(next.observation.age_seconds)) &&
     (next.observation.observed_at === null || finite(next.observation.observed_at)) &&
@@ -211,18 +212,27 @@ function renderCameraDiagnostics(next) {
     paused: "Detection paused", unavailable: "Camera unavailable · reminders suspended",
     awaiting_face: "Waiting for a visible face before monitoring absence",
     confirming_face: "Confirming face presence", present: "Face visible",
-    tracking_loss: "Brief face tracking loss", possible_absence: "Possible absence", absence: "Face not detected",
-    distraction: "Possible absence", reminding: "Sustained face absence",
+    tracking_loss: next.camera_armed ? "Face briefly lost · waiting before counting absence" : "Waiting for a visible face",
+    possible_absence: "No face detected · waiting for a visible face",
+    absence: next.reminder.active ? "Face not detected · reminder active" : "Face not detected · monitoring absence",
     uncertain: "Input uncertain · reminders suspended", stale: "Input stale · reminders suspended"
+  };
+  const uncertainReasons = {
+    low_light: "Image too dark · detection paused", overexposed: "Image too bright · detection paused",
+    low_detail_or_blur: "Image unclear or blurry · detection paused",
+    invalid_landmarks: "Face tracking uncertain · detection paused",
+    stale: "Detection result too old · detection paused"
   };
   let detectionStatus;
   if (next.input_source !== "camera") detectionStatus = "Camera detection off · simulated input selected";
   else if (!next.powered_on || !next.monitoring_enabled) detectionStatus = "Detection paused";
+  else if (next.camera_capture_status === "starting") detectionStatus = "Waiting for camera frames";
+  else if (next.camera_tracking_status === "uncertain" && Object.hasOwn(uncertainReasons, observation?.reason))
+    detectionStatus = uncertainReasons[observation.reason];
   else detectionStatus = (Object.hasOwn(statuses, next.camera_tracking_status) ? statuses[next.camera_tracking_status] : null) ||
       (next.camera_status === "unavailable" ? statuses.unavailable : "Waiting for observations");
   setText("detection-status", detectionStatus);
-  const rawPresenceLabels = {present: "Present", not_detected: "Not detected", unknown: "Unknown"};
-  setText("face-presence", Object.hasOwn(rawPresenceLabels, observation?.presence) ? rawPresenceLabels[observation.presence] : "Unknown");
+  setText("face-presence", Object.hasOwn(presenceLabels, observation?.presence) ? presenceLabels[observation.presence] : "Unavailable");
   setText("head-direction", typeof next.head_direction === "string" ? next.head_direction.slice(0, 60) : "unknown");
   const pose = observation?.head_pose;
   setText("head-angles", pose && [pose.yaw, pose.pitch, pose.roll].every(Number.isFinite) ?

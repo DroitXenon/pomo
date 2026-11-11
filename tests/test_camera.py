@@ -72,7 +72,7 @@ def test_default_camera_source_and_private_session_are_not_broadcast_to_viewers(
             initial = owner.receive_json()
             assert initial['input_source'] == 'camera'
             assert initial['camera_session'] is None
-            assert initial['protocol_version'] == 7
+            assert initial['protocol_version'] == 9
             owner.send_json({'type': 'set_monitoring', 'enabled': True})
             active = owner.receive_json()
             assert active['camera_session']
@@ -104,7 +104,7 @@ def test_invalid_frames_do_not_become_available(content, headers, expected):
         with client.websocket_connect('/ws') as observer:
             state = observer.receive_json()
             assert state['monitoring_enabled'] is True
-            assert state['display'] == 'unavailable'
+            assert state['display'] == 'bored'
 
 
 def test_disconnect_invalidates_owner_session():
@@ -118,7 +118,7 @@ def test_disconnect_invalidates_owner_session():
             state = observer.receive_json()
             assert state['camera_capture_status'] == 'unavailable'
             assert state['monitoring_enabled']
-            assert state['display'] == 'unavailable'
+            assert state['display'] == 'bored'
             assert upload(client, token).status_code == 409
             observer.send_json({'type': 'set_monitoring', 'enabled': True})
             assert observer.receive_json()['camera_session'] != token
@@ -207,7 +207,7 @@ def test_processing_timeout_keeps_worker_slot_until_job_finishes():
                 failed = ws.receive_json()
                 assert failed['camera_session'] is None
                 assert failed['monitoring_enabled'] is True
-                assert failed['display'] == 'unavailable'
+                assert failed['display'] == 'bored'
                 assert upload(client, token, 1).status_code == 409
                 ws.send_json({'type': 'set_monitoring', 'enabled': True})
                 retry_token = ws.receive_json()['camera_session']

@@ -1,7 +1,7 @@
 # CoreS3 display test and future adapter
 
-`pomostack/` is a standalone PlatformIO project for the M5Stack CoreS3. Its
-M5Unified sketch draws a static black-and-white face. Open `firmware/pomostack`
+`display-test/` is a standalone PlatformIO project for the M5Stack CoreS3. Its
+M5Unified sketch draws a static black-and-white face. Open `firmware/display-test`
 as a VS Code folder and use PlatformIO's Build and Upload actions. Uploading
 replaces the program currently on the device.
 
@@ -18,5 +18,5 @@ Open that folder in VS Code
 as a PlatformIO project, build it and upload it to show live camera frames on
 the CoreS3 screen. If initialization fails, the sketch shows an error instead
 of attempting to use the camera. The preview is not sent to Pomo or saved.
-Uploading replaces the current device program; open `pomostack/` and upload it
+Uploading replaces the current device program; open `display-test/` and upload it
 again to restore the face test.

@@ -165,16 +165,16 @@ function browser({audioSupport = true, audioResumeFails = false} = {}) {
 
 function snapshot(overrides = {}) {
   return {
-    type: "state", protocol_version: 7, instance_id: "server-a", revision: 0,
+    type: "state", protocol_version: 9, instance_id: "server-a", revision: 0,
     dev_controls: true, powered_on: true, monitoring_enabled: false, muted: true,
-    behavior_state: "ready", display: "ready", camera_status: "unavailable",
-    observation: {presence: "unknown", source: "none", observed_at: null, age_seconds: null},
+    behavior_state: "happy", display: "happy", camera_status: "unavailable",
+    observation: {presence: "unavailable", source: "none", observed_at: null, age_seconds: null},
     observation_session: "session-a", absence_duration_seconds: 0, cooldown_remaining_seconds: 0,
     reminder: {active: false, id: 0, message: null},
     settings: {absence_seconds: 5, cooldown_seconds: 30, observation_timeout_seconds: 3},
     input_source: "camera", camera_session: null, camera_capture_status: "paused", camera_processor_ready: true,
     camera_settings: {width: 640, height: 480, fps: 10, jpeg_quality: 0.75, max_bytes: 524288, timeout_seconds: 3},
-    camera_observation: null, head_direction: "unknown", frames_received: 0, last_frame: null,
+    camera_observation: {presence: "unavailable", reason: "no_camera_data"}, head_direction: "unknown", frames_received: 0, last_frame: null,
     camera_armed: false, camera_tracking_status: "paused",
     events: [], ...overrides
   };

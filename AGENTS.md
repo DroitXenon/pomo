@@ -77,9 +77,9 @@ Preserve these contracts unless the requested task changes them. Update the back
 - Commands are strictly validated. Invalid input must not mutate state or crash the server.
 - All clients currently share one in-memory robot state. Use one backend worker while state remains process-local.
 - Each accepted command increments the revision and broadcasts a complete snapshot. New/reconnecting clients receive current state.
-- Protocol 7 display identifiers are `ready`, `shutdown`, `distraction`, `reminding` and `unavailable`. Keep identifiers consistent across Python, JavaScript, tests and docs; v1 `possible_absence` is replaced by `distraction`.
-- Protocol 7 combines the former v2 reminders and v6 camera contracts. `set_input_source` selects camera or simulated input while paused; only the camera owner receives its upload token. Keep raw `camera_observation` diagnostics separate from normalized policy `observation`.
-- Monitoring changes discard observations and active reminders and rotate the session token. Pausing shows `ready`; enabling without fresh input shows `unavailable`. Manual previews require power on, monitoring paused and development controls enabled.
+- Protocol 9 display identifiers are `happy`, `sad`, `surprised`, `bored` and `idle`. Keep identifiers consistent across Python, JavaScript, tests and docs.
+- Protocol 9 combines reminders and camera input. `set_input_source` selects camera or simulated input while paused; only the camera owner receives its upload token. Keep detailed `camera_observation` diagnostics separate from policy `observation`; their shared presence values are `present`, `absent`, `uncertain` and `unavailable`.
+- Monitoring changes discard observations and active reminders and rotate the session token. Pausing and enabling without fresh input show `bored`. Manual previews require power on, monitoring paused and development controls enabled.
 - Manual previews are rendering controls, not detection observations or evidence of a triggered reminder.
 - Controls remain disabled until a valid snapshot arrives. Disconnection marks displayed state stale; offline commands are not queued for replay.
 - Keep connection health, camera availability, monitoring state and display state distinct.
