@@ -7,7 +7,7 @@ const root = path.join(__dirname, "..");
 const html = fs.readFileSync(path.join(root, "simulator/index.html"), "utf8");
 const code = fs.readFileSync(path.join(root, "simulator/app.js"), "utf8");
 
-function browser({audioSupport = true, audioResumeFails = false} = {}) {
+function browser({audioSupport = true, audioResumeFails = false, speechSupport = false} = {}) {
   class Element {
     constructor() {
       this.textWrites = 0;
@@ -95,6 +95,13 @@ function browser({audioSupport = true, audioResumeFails = false} = {}) {
     }
   }
   const tones = [];
+  const spoken = [];
+  const speech = {
+    cancels: 0, speaking: false, pending: false,
+    speak(utterance) { spoken.push(utterance); this.speaking = true; },
+    cancel() { this.cancels++; this.speaking = false; }
+  };
+  class SpeechSynthesisUtterance { constructor(text) { this.text = text; } }
   class AudioContext {
     constructor() { this.state = "suspended"; this.currentTime = 0; this.destination = {}; }
     async resume() {
@@ -125,6 +132,8 @@ function browser({audioSupport = true, audioResumeFails = false} = {}) {
   const window = {
     location,
     AudioContext: audioSupport ? AudioContext : undefined,
+    speechSynthesis: speechSupport ? speech : undefined,
+    SpeechSynthesisUtterance: speechSupport ? SpeechSynthesisUtterance : undefined,
     addEventListener(name, fn) { listeners[name] = fn; }
   };
   const document = {
@@ -142,7 +151,7 @@ function browser({audioSupport = true, audioResumeFails = false} = {}) {
     clearInterval: (id) => timers.delete(id)
   }, {filename: "simulator/app.js"});
   return {
-    elements, observations, previews, sources, cameras, sockets, tones, listeners, document,
+    elements, observations, previews, sources, cameras, sockets, tones, spoken, speech, listeners, document,
     click(id) {
       const element = typeof id === "string" ? elements[id] : id;
       assert.equal(element.disabled, false);
@@ -165,13 +174,15 @@ function browser({audioSupport = true, audioResumeFails = false} = {}) {
 
 function snapshot(overrides = {}) {
   return {
-    type: "state", protocol_version: 9, instance_id: "server-a", revision: 0,
+    type: "state", protocol_version: 10, instance_id: "server-a", revision: 0,
     dev_controls: true, powered_on: true, monitoring_enabled: false, muted: true,
     behavior_state: "happy", display: "happy", camera_status: "unavailable",
     observation: {presence: "unavailable", source: "none", observed_at: null, age_seconds: null},
     observation_session: "session-a", absence_duration_seconds: 0, cooldown_remaining_seconds: 0,
-    reminder: {active: false, id: 0, message: null},
-    settings: {absence_seconds: 5, cooldown_seconds: 30, observation_timeout_seconds: 3},
+    standby: false, next_step_seconds: null,
+    reminder: {active: false, id: 0, stage: 0, message: null},
+    settings: {absence_seconds: 10, cooldown_seconds: 0, observation_timeout_seconds: 3,
+      repeat_seconds: 300, standby_seconds: 600},
     input_source: "camera", camera_session: null, camera_capture_status: "paused", camera_processor_ready: true,
     camera_settings: {width: 640, height: 480, fps: 10, jpeg_quality: 0.75, max_bytes: 524288, timeout_seconds: 3},
     camera_observation: {presence: "unavailable", reason: "no_camera_data"}, head_direction: "unknown", frames_received: 0, last_frame: null,

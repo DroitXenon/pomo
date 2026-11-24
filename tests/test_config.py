@@ -6,13 +6,14 @@ from backend.config import CameraConfig, PerceptionConfig, Settings
 from backend.policy import PolicyConfig
 
 
-def test_defaults_are_local_muted_and_match_policy_defaults():
+def test_defaults_are_local_with_sound_and_match_policy_defaults():
     settings = Settings.from_env({})
     assert settings.host == "127.0.0.1"
     assert settings.port == 8000
     assert settings.dev_controls is True
-    assert settings.sound_enabled is False
+    assert settings.sound_enabled is True
     assert settings.policy == PolicyConfig()
+    assert settings.behaviour.absence_seconds == settings.policy.absence_seconds == 10
 
 
 def test_explicit_environment_overrides_all_settings():

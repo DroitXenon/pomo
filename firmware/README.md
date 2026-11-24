@@ -1,4 +1,27 @@
-# CoreS3 display test and future adapter
+# CoreS3 firmware
+
+## Robot adapter
+
+`robot-adapter/` is the physical Pomo face. It reads one JSON line per display
+change from the backend over USB serial (format in
+[../docs/protocol.md](../docs/protocol.md#robot-display-serial)) and draws the five
+expressions in black and white with M5Unified: happy, surprised, crying `sad` with
+animated tears, bored and idle. A new reminder ID plays a short chime when sound is
+not muted; the laptop browser speaks the words. With no message for 6 seconds the
+device shows the bored face and "No link". It sends nothing back.
+
+1. Open `firmware/robot-adapter` in VS Code with PlatformIO, or run `pio run -t upload`
+   in that folder, with the CoreS3 connected by USB. Uploading replaces the current
+   program.
+2. Find the port (`ls /dev/cu.usbmodem*` on macOS) and close any serial monitor.
+3. Start the backend with that port, for example
+   `POMO_SERIAL_PORT=/dev/cu.usbmodem1101 sh scripts/dev.sh`, then enable monitoring
+   in the simulator.
+
+`pio run` builds the sketch without a device. Rendering, the chime and the serial
+link have not yet been checked on hardware.
+
+## Display test
 
 `display-test/` is a standalone PlatformIO project for the M5Stack CoreS3. Its
 M5Unified sketch draws a static black-and-white face. Open `firmware/display-test`

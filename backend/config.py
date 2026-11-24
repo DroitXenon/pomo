@@ -71,7 +71,7 @@ class PerceptionConfig(FiniteConfig):
 
 class BehaviourConfig(FiniteConfig):
     tracking_loss_grace_seconds: float = Field(default=1, ge=0, le=30)
-    absence_seconds: float = Field(default=5, gt=0, le=3600)
+    absence_seconds: float = Field(default=10, gt=0, le=3600)
     return_seconds: float = Field(default=0.5, ge=0, le=30)
     observation_max_age_seconds: float = Field(default=1, gt=0, le=60)
 
@@ -110,6 +110,8 @@ class Settings:
     camera: CameraConfig
     perception: PerceptionConfig
     behaviour: BehaviourConfig
+    serial_port: str = ""
+    serial_baudrate: int = 115200
 
     @classmethod
     def from_env(cls, environ=None):
@@ -123,17 +125,27 @@ class Settings:
             raise ValueError("POMO_PORT must be an integer between 1 and 65535") from error
         if not 1 <= port <= 65535:
             raise ValueError("POMO_PORT must be between 1 and 65535")
+        serial_port = environ.get("POMO_SERIAL_PORT", "").strip()
+        try:
+            serial_baudrate = int(environ.get("POMO_SERIAL_BAUDRATE", "115200"))
+        except (TypeError, ValueError) as error:
+            raise ValueError("POMO_SERIAL_BAUDRATE must be a positive integer") from error
+        if serial_baudrate <= 0:
+            raise ValueError("POMO_SERIAL_BAUDRATE must be a positive integer")
         return cls(
             host=host, port=port,
+            serial_port=serial_port, serial_baudrate=serial_baudrate,
             camera=CameraConfig.from_env(environ),
             perception=PerceptionConfig.from_env(environ),
             behaviour=BehaviourConfig.from_env(environ),
             dev_controls=_boolean(environ, "POMO_DEV_CONTROLS", "true"),
-            sound_enabled=_boolean(environ, "POMO_SOUND_ENABLED", "false"),
+            sound_enabled=_boolean(environ, "POMO_SOUND_ENABLED", "true"),
             policy=PolicyConfig(
-                absence_seconds=_number(environ, "POMO_ABSENCE_SECONDS", "5"),
-                cooldown_seconds=_number(environ, "POMO_REMINDER_COOLDOWN_SECONDS", "30"),
+                absence_seconds=_number(environ, "POMO_ABSENCE_SECONDS", "10"),
+                cooldown_seconds=_number(environ, "POMO_REMINDER_COOLDOWN_SECONDS", "0"),
                 observation_timeout_seconds=_number(environ, "POMO_OBSERVATION_TIMEOUT_SECONDS", "3"),
                 uncertainty_seconds=_number(environ, "POMO_UNCERTAINTY_SECONDS", "1"),
+                repeat_seconds=_number(environ, "POMO_REMINDER_REPEAT_SECONDS", "300"),
+                standby_seconds=_number(environ, "POMO_STANDBY_SECONDS", "600"),
             ),
         )

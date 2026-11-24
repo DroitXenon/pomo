@@ -335,3 +335,19 @@ Fake-clock policy checks cover the 0.999/1.000-second boundary, subsequent remin
 - `PYTHONDONTWRITEBYTECODE=1 conda run --no-capture-output --name pomo python -m pytest -q -p no:cacheprovider -o faulthandler_timeout=20`: 279 passed, with the existing Starlette/HTTPX deprecation warning.
 - `node --test tests/test_simulator.js tests/test_simulator.cjs tests/test_camera_client.cjs`: 42 passed. `node --check simulator/app.js` and `node --check simulator/camera.js` also passed.
 - Browser rendering and physical hardware were not tested during this merge. The user previously reported the CoreS3 camera preview works.
+
+## Proposal reminder sequence (protocol 10) — 24 November 2026
+
+- Fake-clock policy tests cover surprised before the first reminder; the first reminder at 10 s measured from the first lost face; the second at +300 s with a new ID; standby at +600 s with no further reminders; return from each stage, including after standby; return-latency log messages; dismissal keeping the schedule; cooldown spacing between departures; and the new configuration validation.
+- `conda run --name pomo python -m pytest -q -p no:cacheprovider`: 281 passed, with the existing Starlette/HTTPX deprecation warning.
+- `node --test tests/test_simulator.js tests/test_simulator.cjs tests/test_camera_client.cjs`: 43 passed, including a stubbed `speechSynthesis` check that each new reminder ID is spoken once and that clearing or muting cancels speech. `node --check simulator/app.js` passed.
+- A live server on port 8011 (`POMO_ABSENCE_SECONDS=3`, `POMO_REMINDER_REPEAT_SECONDS=4`, `POMO_STANDBY_SECONDS=8`) was driven with simulated observations over WebSocket. Displays went happy → surprised (0.6 s) → sad, stage 1 (3.6 s) → sad, stage 2 (7.7 s) → bored standby (11.7 s) → happy on return. The server log showed `departure_detected`, `reminder_triggered` (first, second), `standby_entered` and `user_returned ... after standby`. The server was stopped afterwards.
+- Browser speech output, rendering of the crying face, a physical camera and the CoreS3 were not tested.
+
+## CoreS3 serial adapter (code only) — 24 November 2026
+
+- `tests/test_hardware.py` uses a fake serial port and clock. It checks the compact message, latest-value queueing, duplicate suppression, the unavailable device and retry, write failure and reconnect, the 2-second heartbeat, thread start and close releasing the port, app broadcasts reaching the adapter (an adapter exception does not break broadcasts) and `POMO_SERIAL_PORT`/`POMO_SERIAL_BAUDRATE` validation.
+- `pyserial==3.5` added to `environment.yml`; it was already present in the `pomo` environment. `conda run --name pomo python -m pip check`: no broken requirements.
+- Full suite: 290 passed, with the existing Starlette/HTTPX deprecation warning.
+- `pio run` in `firmware/robot-adapter` built for `m5stack-cores3` without warnings in the sketch (RAM 7.2%, flash 8.3%).
+- The firmware was not uploaded. Rendering, the chime, USB serial with a real device, reconnection after unplugging and the study viewing distance remain untested.

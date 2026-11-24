@@ -98,7 +98,7 @@ def close_and_wait(client, app, ws, expected_clients):
 def test_health_static_and_protocol_defaults(rig):
     client, _, _ = rig
     assert client.get("/health").json() == {
-        "status": "ok", "phase": 2, "protocol_version": 9, "camera_processor_ready": True,
+        "status": "ok", "phase": 2, "protocol_version": 10, "camera_processor_ready": True,
     }
     assert "Pomo" in client.get("/").text
     assert client.get("/app.js").status_code == 200
@@ -106,14 +106,17 @@ def test_health_static_and_protocol_defaults(rig):
     with client.websocket_connect("/ws") as ws:
         state = ws.receive_json()
         assert state["type"] == "state"
-        assert state["protocol_version"] == 9
+        assert state["protocol_version"] == 10
         assert state["revision"] == 1
         assert state["instance_id"] and state["observation_session"]
         assert state["powered_on"] is True
         assert state["monitoring_enabled"] is False
         assert state["muted"] is True
         assert state["display"] == state["behavior_state"] == "bored"
-        assert state["reminder"] == {"active": False, "id": 0, "message": None}
+        assert state["reminder"] == {"active": False, "id": 0, "stage": 0, "message": None}
+        assert state["standby"] is False and state["next_step_seconds"] is None
+        assert state["settings"]["repeat_seconds"] == 300
+        assert state["settings"]["standby_seconds"] == 600
 
 
 def test_commands_broadcast_identical_snapshots_to_all_clients(rig):
@@ -267,7 +270,8 @@ def test_elapsed_tick_triggers_once_and_dismissal_requires_current_id(rig):
         clock.advance(0.001)
         tick(client, app)
         state = ws.receive_json()
-        assert state["display"] == "surprised" and state["reminder"]["id"] == 1
+        assert state["display"] == "sad" and state["reminder"]["id"] == 1
+        assert state["reminder"]["stage"] == 1
         for _ in range(11):
             clock.advance(1)
             state = observe(ws, clock, state)
@@ -282,7 +286,8 @@ def test_elapsed_tick_triggers_once_and_dismissal_requires_current_id(rig):
         for _ in range(10):
             clock.advance(1)
             state = observe(ws, clock, state)
-        assert state["reminder"]["id"] == 2 and state["reminder"]["active"] is True
+        assert state["reminder"]["id"] == 1 and state["reminder"]["active"] is False
+        assert state["display"] == "sad"
         before = current(client, app)
         assert command(ws, "dismiss_reminder", reminder_id=1)["type"] == "error"
         assert without_events(current(client, app)) == without_events(before)
@@ -312,7 +317,7 @@ def test_cooldown_survives_return_pause_and_unavailable_input(rig):
         for _ in range(3):
             clock.advance(1)
             state = observe(ws, clock, state)
-        assert state["display"] == "sad" and state["reminder"]["id"] == 1
+        assert state["display"] == "surprised" and state["reminder"]["id"] == 1
 
 
 def test_expiry_rotates_session_once_and_rejects_buffered_observations(rig):
@@ -358,7 +363,7 @@ def test_frame_arriving_after_expiry_cannot_beat_the_timer_with_an_old_session(r
         assert state["observation"]["source"] == "none"
         assert state["reminder"]["active"] is False
         state = observe(ws, clock, state, source="simulated")
-        assert state["display"] == "sad"
+        assert state["display"] == "surprised"
         assert state["absence_duration_seconds"] == 0
         assert state["reminder"]["active"] is False
 

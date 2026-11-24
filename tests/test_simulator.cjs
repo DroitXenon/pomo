@@ -54,10 +54,10 @@ test("visible camera description follows tracking, quality, reminder and connect
   message(state);
   assert.equal(node("detection-status").textContent, "Waiting for a visible face");
   state.camera_tracking_status = "absence";
-  state.reminder = {active: true, id: 1, message: "A gentle reminder"};
+  state.reminder = {active: true, id: 1, stage: 1, message: "A gentle reminder"};
   message(state);
   assert.equal(node("detection-status").textContent, "Face not detected · reminder active");
-  state.reminder = {active: false, id: 1, message: null};
+  state.reminder = {active: false, id: 1, stage: 1, message: null};
   state.camera_tracking_status = "uncertain";
   state.camera_observation = {presence: "uncertain", reason: "low_detail_or_blur"};
   state.observation.presence = "uncertain";
@@ -78,7 +78,7 @@ test("real reminders use the shared dismissal id while expression previews have 
   assert.equal(node("preview-status").hidden, false);
   state.monitoring_enabled = true;
   state.behavior_state = "surprised";
-  state.reminder = {active: true, id: 7, message: "A gentle reminder"};
+  state.reminder = {active: true, id: 7, stage: 1, message: "A gentle reminder"};
   message(state);
   assert.equal(node("dismiss").disabled, false);
   assert.equal(node("reminder-panel").hidden, false);

@@ -294,3 +294,27 @@ A V8 mocked frontend check covered ten camera conditions and disconnect; see
 **Next step:**
 Check the layout and status changes in a browser with a real camera; run the
 repository's Node tests where Node.js is available.
+
+### 2026-11-24-justin-proposal-reminder-sequence
+
+- Date: 2026-11-24 UTC+00:00
+- Author: Justin (task owner) / Claude Code
+- Type: Decision
+- Related entries: 2026-11-11-pomo-expression-identifiers
+- Context: `feature/proposal-reminders`, from `feature/stack`; `backend/policy.py`, `backend/config.py`, `backend/app.py`, `simulator/`, protocol v10.
+
+**Idea or response:**
+The task owner decided that the reminder sequence and voice follow the team proposal (Notion "Report Proposol"), and that the study follows Susana's plan. Pomo now:
+- shows `surprised` once the user has left;
+- after 10 s, shows `sad` (crying) and speaks the first reminder;
+- after a further 5 min, speaks a second reminder;
+- 10 min after the first reminder, enters `bored` standby;
+- returns to `happy` whenever the user comes back.
+
+During standby, monitoring stays on. The voice uses browser speech synthesis in English, and sound defaults to on. Study timing comes from the server log (`departure_detected`, `reminder_triggered`, `standby_entered`, `user_returned` with latency); nothing new is persisted.
+
+**Reasoning and evidence:**
+The previous v9 mapping (sad on absence, surprised at the reminder, 30 s cooldown, no repeat) did not match the proposal the report describes. See `docs/verification.md` (24 November 2026) for the tests and the live-server sequence check.
+
+**Next step:**
+Teammates must update to protocol 10. The firmware must treat `sad` as the crying reminder face and `surprised` as the brief-absence face. Check speech and the crying face in a browser before the pilot. The CoreS3 face is now `firmware/robot-adapter`, driven over USB serial by `backend/hardware.py` when `POMO_SERIAL_PORT` is set (protocol.md, "Robot Display Serial"). It builds but has not been flashed or tested on the device.

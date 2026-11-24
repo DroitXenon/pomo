@@ -56,25 +56,25 @@ test("unavailable input is sent once and stopping or powering off disables simul
 test("sound requires a local gesture and never replays current reminders on reconnect", async () => {
   const b = browser();
   const socket = b.sockets[0];
-  const active = {active: true, id: 1, message: "A gentle reminder"};
-  socket.receive(snapshot({monitoring_enabled: true, muted: false, display: "surprised", behavior_state: "surprised", reminder: active}));
+  const active = {active: true, id: 1, stage: 1, message: "A gentle reminder"};
+  socket.receive(snapshot({monitoring_enabled: true, muted: false, display: "sad", behavior_state: "sad", reminder: active}));
   assert.equal(b.tones.length, 0);
   assert.equal(b.elements["audio-unlock"].hidden, false);
   await b.click("audio-unlock");
-  socket.receive(snapshot({revision: 1, monitoring_enabled: true, muted: false, display: "surprised", behavior_state: "surprised", reminder: active}));
+  socket.receive(snapshot({revision: 1, monitoring_enabled: true, muted: false, display: "sad", behavior_state: "sad", reminder: active}));
   assert.equal(b.tones.length, 0, "unlocking does not replay an existing reminder");
-  socket.receive(snapshot({revision: 2, monitoring_enabled: true, muted: false, display: "surprised", behavior_state: "surprised", reminder: {...active, id: 2}}));
+  socket.receive(snapshot({revision: 2, monitoring_enabled: true, muted: false, display: "sad", behavior_state: "sad", reminder: {...active, id: 2}}));
   assert.equal(b.tones.length, 1);
-  socket.receive(snapshot({revision: 3, monitoring_enabled: true, muted: false, display: "surprised", behavior_state: "surprised", reminder: {...active, id: 2}}));
+  socket.receive(snapshot({revision: 3, monitoring_enabled: true, muted: false, display: "sad", behavior_state: "sad", reminder: {...active, id: 2}}));
   assert.equal(b.tones.length, 1, "timer snapshots do not repeat a cue");
   await b.click("sound");
   assert.equal(socket.sent.at(-1).muted, true);
   assert.ok(b.tones[0].stopCalls.includes(undefined), "mute stops an in-flight tone immediately");
   socket.close();
   const next = b.reconnect();
-  next.receive(snapshot({monitoring_enabled: true, muted: false, display: "surprised", behavior_state: "surprised", reminder: {...active, id: 3}}));
+  next.receive(snapshot({monitoring_enabled: true, muted: false, display: "sad", behavior_state: "sad", reminder: {...active, id: 3}}));
   assert.equal(b.tones.length, 1, "initial reconnect snapshot is silent");
-  next.receive(snapshot({revision: 1, monitoring_enabled: true, muted: false, display: "surprised", behavior_state: "surprised", reminder: {...active, id: 4}}));
+  next.receive(snapshot({revision: 1, monitoring_enabled: true, muted: false, display: "sad", behavior_state: "sad", reminder: {...active, id: 4}}));
   assert.equal(b.tones.length, 2);
 });
 
@@ -104,7 +104,7 @@ test("unsupported or blocked audio leaves visual reminders and global mute contr
     await b.click("sound");
     assert.equal(socket.sent.at(-1).muted, false);
     socket.receive(snapshot({revision: 1, monitoring_enabled: true, muted: false}));
-    socket.receive(snapshot({revision: 2, monitoring_enabled: true, muted: false, display: "surprised", behavior_state: "surprised", reminder: {active: true, id: 1, message: "A gentle reminder"}}));
+    socket.receive(snapshot({revision: 2, monitoring_enabled: true, muted: false, display: "sad", behavior_state: "sad", reminder: {active: true, id: 1, stage: 1, message: "A gentle reminder"}}));
     assert.equal(b.elements["reminder-panel"].hidden, false);
     assert.equal(b.elements.dismiss.disabled, false);
     assert.ok(b.elements["audio-status"].textContent.includes("Visual reminders still work"));
@@ -135,4 +135,26 @@ test("an incompatible protocol never enables controls or enters a reconnect loop
   assert.equal(b.elements.connection.textContent, "Incompatible");
   assert.ok(b.elements.feedback.textContent.includes("protocol mismatch"));
   assert.equal(b.timerCount(), 0);
+});
+
+test("each new reminder speaks its message and mute or clearing cancels speech", async () => {
+  const b = browser({speechSupport: true});
+  const socket = b.sockets[0];
+  const active = {active: true, id: 1, stage: 1, message: "I miss you. Please come back."};
+  const base = {monitoring_enabled: true, muted: false, display: "sad", behavior_state: "sad"};
+  socket.receive(snapshot({...base, reminder: {active: false, id: 0, stage: 0, message: null}, display: "surprised", behavior_state: "surprised"}));
+  await b.click("audio-unlock");
+  socket.receive(snapshot({...base, revision: 1, reminder: active}));
+  assert.deepEqual(b.spoken.map((u) => u.text), ["I miss you. Please come back."]);
+  assert.equal(b.tones.length, 0, "speech replaces the fallback tone");
+  socket.receive(snapshot({...base, revision: 2, reminder: active}));
+  assert.equal(b.spoken.length, 1, "timer snapshots do not repeat speech");
+  socket.receive(snapshot({...base, revision: 3, reminder: {active: true, id: 2, stage: 2, message: "Still here."}}));
+  assert.deepEqual(b.spoken.map((u) => u.text), ["I miss you. Please come back.", "Still here."]);
+  const cancels = b.speech.cancels;
+  socket.receive(snapshot({...base, revision: 4, display: "happy", behavior_state: "happy", reminder: {active: false, id: 2, stage: 0, message: null}}));
+  assert.ok(b.speech.cancels > cancels, "a cleared reminder cancels speech");
+  b.speech.speaking = true;
+  await b.click("sound");
+  assert.equal(b.speech.speaking, false, "mute cancels speech");
 });

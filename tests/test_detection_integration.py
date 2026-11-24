@@ -35,9 +35,9 @@ def harness():
     app = create_app(
         processor_factory=ScriptedProcessor, clock=clock.monotonic,
         wall_clock=clock.wall, run_ticker=False,
-        config=PolicyConfig(absence_seconds=1, cooldown_seconds=2,
+        config=PolicyConfig(absence_seconds=2, cooldown_seconds=2,
                             observation_timeout_seconds=3),
-        behaviour_config=BehaviourConfig(absence_seconds=1,
+        behaviour_config=BehaviourConfig(absence_seconds=2,
             tracking_loss_grace_seconds=0.25, return_seconds=0.25),
     )
     return app, clock, detection
@@ -73,11 +73,14 @@ class CameraDriver:
         self.arm()
         state = self.frame('absent')
         assert state['reminder']['active'] is False
-        for _ in range(8):
+        for index in range(8):
             state = self.frame('absent')
-        assert state['behavior_state'] == 'surprised'
-        assert state['display'] == 'surprised'
+            if index < 7:
+                assert state['reminder']['active'] is False
+        assert state['behavior_state'] == 'sad'
+        assert state['display'] == 'sad'
         assert state['reminder']['active'] is True
+        assert state['reminder']['stage'] == 1
         return state
 
 
@@ -134,11 +137,11 @@ def test_camera_absence_reminder_mute_dismissal_cooldown_return_and_pause():
         assert state['display'] == 'sad'
         assert state['reminder']['active'] is False
         assert state['cooldown_remaining_seconds'] == 2
-        for _ in range(7):
+        for _ in range(4):
             state = driver.frame('absent')
             assert state['reminder']['active'] is False
-        state = driver.frame('absent')
-        assert state['reminder']['id'] == reminder_id + 1
+            assert state['display'] == 'sad'
+        assert state['reminder']['id'] == reminder_id
         assert send(ws, 'dismiss_reminder', reminder_id=reminder_id)['type'] == 'error'
         driver.frame('present')
         state = driver.frame('present')
@@ -330,11 +333,11 @@ def test_initial_no_face_becomes_absent_after_one_second():
             assert state['camera_observation']['presence'] == state['observation']['presence'] == expected
             assert state['camera_armed'] is False
             assert state['reminder']['active'] is (index == 8)
-            assert state['absence_duration_seconds'] == pytest.approx(max(0, (index - 4) * 0.25))
+            assert state['absence_duration_seconds'] == pytest.approx(index * 0.25 if index >= 4 else 0)
             assert state['camera_absence_duration_seconds'] == pytest.approx(index * 0.25)
             assert state['camera_tracking_status'] == (
                 'tracking_loss' if index == 0 else 'possible_absence')
-            assert state['display'] == ('happy' if index < 4 else 'sad' if index < 8 else 'surprised')
+            assert state['display'] == ('happy' if index < 4 else 'surprised' if index < 8 else 'sad')
 
 
 def test_camera_owner_failure_and_retry_then_power_cycle_reject_old_frames():

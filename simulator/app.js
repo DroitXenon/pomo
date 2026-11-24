@@ -48,7 +48,7 @@ function validSnapshot(next) {
   const cameraSettings = object(next?.camera_settings) &&
     ["width", "height", "fps", "jpeg_quality", "max_bytes", "timeout_seconds"].every((key) => positive(next.camera_settings[key])) &&
     next.camera_settings.jpeg_quality <= 1;
-  return object(next) && next.protocol_version === 9 &&
+  return object(next) && next.protocol_version === 10 &&
     typeof next.instance_id === "string" && next.instance_id.length > 0 &&
     Number.isSafeInteger(next.revision) && next.revision >= 0 &&
     ["dev_controls", "powered_on", "monitoring_enabled", "muted"].every((key) => typeof next[key] === "boolean") &&
@@ -61,6 +61,7 @@ function validSnapshot(next) {
       next.powered_on && next.monitoring_enabled && next.input_source === "camera" && next.camera_processor_ready)) &&
     typeof next.observation_session === "string" && next.observation_session.length > 0 &&
     finite(next.absence_duration_seconds) && finite(next.cooldown_remaining_seconds) &&
+    typeof next.standby === "boolean" && (next.next_step_seconds === null || finite(next.next_step_seconds)) &&
     object(next.observation) && Object.hasOwn(presenceLabels, next.observation.presence) &&
     object(next.camera_observation) && next.camera_observation.presence === next.observation.presence &&
     Object.hasOwn(sourceLabels, next.observation.source) &&
@@ -68,8 +69,10 @@ function validSnapshot(next) {
     (next.observation.observed_at === null || finite(next.observation.observed_at)) &&
     object(next.reminder) && typeof next.reminder.active === "boolean" &&
     Number.isSafeInteger(next.reminder.id) && next.reminder.id >= 0 &&
+    [0, 1, 2].includes(next.reminder.stage) &&
     (next.reminder.message === null || typeof next.reminder.message === "string") &&
-    object(next.settings) && ["absence_seconds", "cooldown_seconds", "observation_timeout_seconds"].every((key) => finite(next.settings[key])) &&
+    object(next.settings) && ["absence_seconds", "cooldown_seconds", "observation_timeout_seconds",
+      "repeat_seconds", "standby_seconds"].every((key) => finite(next.settings[key])) &&
     Array.isArray(next.events);
 }
 
@@ -115,6 +118,7 @@ function updateSimulationStatus() {
 }
 
 function stopTone() {
+  try { if (window.speechSynthesis?.speaking || window.speechSynthesis?.pending) window.speechSynthesis.cancel(); } catch {}
   if (!currentTone) return;
   const tone = currentTone;
   currentTone = null;
@@ -146,7 +150,25 @@ async function unlockAudio() {
   audioStatus();
 }
 
-function playCue() {
+function speakCue(message) {
+  const synth = window.speechSynthesis;
+  const Utterance = window.SpeechSynthesisUtterance;
+  if (!synth || typeof Utterance !== "function" || typeof message !== "string" || !message) return false;
+  try {
+    synth.cancel();
+    const utterance = new Utterance(message.slice(0, 300));
+    utterance.lang = "en-GB";
+    utterance.rate = 0.95;
+    synth.speak(utterance);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function playCue(message) {
+  // Speech still needs the tab's audio unlock gesture, like the fallback tone.
+  if (audioContext?.state === "running" && speakCue(message)) return;
   if (!audioContext || audioContext.state !== "running") {
     audioStatus();
     return;
@@ -312,8 +334,13 @@ function render(next, initialSnapshot) {
   renderCameraDiagnostics(state);
   setText("absence-duration", seconds(state.absence_duration_seconds));
   setText("cooldown-status", seconds(state.cooldown_remaining_seconds));
+  const stages = {0: "None", 1: "First", 2: "Second"};
+  setText("reminder-stage", state.standby ? "Standby" : stages[state.reminder.stage]);
+  setText("next-step", state.next_step_seconds === null ? "—" : seconds(state.next_step_seconds));
   setText("observation-age", state.observation.age_seconds === null ? "—" : seconds(state.observation.age_seconds));
-  setText("policy-settings", `Reminder after ${seconds(state.settings.absence_seconds)} · Cooldown ${seconds(state.settings.cooldown_seconds)} · Input expires after ${seconds(state.settings.observation_timeout_seconds)}`);
+  setText("policy-settings", `First reminder ${seconds(state.settings.absence_seconds)} after leaving · Second ${seconds(state.settings.repeat_seconds)} later · Standby ${seconds(state.settings.standby_seconds)} after the first` +
+    (state.settings.cooldown_seconds > 0 ? ` · Cooldown ${seconds(state.settings.cooldown_seconds)}` : "") +
+    ` · Input expires after ${seconds(state.settings.observation_timeout_seconds)}`);
   setText("behavior-state", displayLabels[state.behavior_state]);
   setText("revision", String(state.revision));
   setText("previews-status", !state.dev_controls ? "Expression previews are disabled by the backend." : state.monitoring_enabled ? "Pause monitoring to preview expressions." : "Display previews do not trigger reminders or sound.");
@@ -330,7 +357,7 @@ function render(next, initialSnapshot) {
     const unseen = !seenReminders.has(key);
     seenReminders.add(key);
     while (seenReminders.size > 100) seenReminders.delete(seenReminders.values().next().value);
-    if (unseen && !initialSnapshot && !state.muted && state.powered_on && state.monitoring_enabled) playCue();
+    if (unseen && !initialSnapshot && !state.muted && state.powered_on && state.monitoring_enabled) playCue(state.reminder.message);
   }
 }
 

@@ -20,7 +20,7 @@ from backend.observations import Observation, Presence
 from backend.policy import PolicyConfig, ReminderEngine
 
 LOG = logging.getLogger("pomo")
-PROTOCOL_VERSION = 9
+PROTOCOL_VERSION = 10
 Display = Literal["happy", "idle", "sad", "surprised", "bored"]
 
 
@@ -90,8 +90,10 @@ class Runtime:
     """
 
     def __init__(self, engine, dev_controls, *, camera_config, perception_config,
-                 behaviour_config, processor_factory, clock, wall_clock):
+                 behaviour_config, processor_factory, clock, wall_clock,
+                 display_adapter=None):
         self.engine = engine
+        self.display_adapter = display_adapter
         self.dev_controls = dev_controls
         self.instance_id = str(uuid4())
         self.revision = 0
@@ -187,6 +189,15 @@ class Runtime:
                 LOG.log(level, "%s: %s", event["kind"], event["message"])
                 self._last_logged = event["id"]
 
+    def _publish_display(self, snapshot):
+        """Hand the snapshot to the optional robot display without blocking."""
+        if self.display_adapter is None:
+            return
+        try:
+            self.display_adapter.publish(snapshot)
+        except Exception:
+            LOG.exception("Robot display adapter rejected a snapshot")
+
     async def _send(self, ws, payload):
         await asyncio.wait_for(ws.send_json(payload), timeout=2)
 
@@ -195,6 +206,7 @@ class Runtime:
         while True:
             self._last_snapshot = self.snapshot()
             self._log_events()
+            self._publish_display(self._last_snapshot)
             peers = tuple(self.clients)
             results = await asyncio.gather(
                 *(self._send(peer, self.snapshot(peer)) for peer in peers),
@@ -466,7 +478,7 @@ class Runtime:
                 if not encoded:
                     raise HTTPException(400, "Empty frame")
                 async with self.lock:
-                    if token != self.camera_session:
+                    if not self.camera_session or not secrets.compare_digest(token, self.camera_session):
                         raise HTTPException(409, "Camera session expired")
                     self.last_sequence = sequence
                 job = asyncio.get_running_loop().run_in_executor(
@@ -488,11 +500,7 @@ class Runtime:
                             self.head.direction)
                 try:
                     presence = self._normalized_presence(observation, now)
-                    self.engine.observe(
-                        presence, "camera", received_wall, observation_session,
-                        transient_loss=(self.camera_armed and
-                                        self.camera_tracking_status == "tracking_loss"),
-                    )
+                    self.engine.observe(presence, "camera", received_wall, observation_session)
                 except ValueError as error:
                     # Validation rejects duplicates/expired input before policy mutation.
                     # Keep the perception adapter equally atomic on that rejected frame.
@@ -570,6 +578,7 @@ def create_app(
     camera_config: CameraConfig | None = None,
     perception_config: PerceptionConfig | None = None,
     behaviour_config: BehaviourConfig | None = None, processor_factory=None,
+    display_adapter=None,
 ) -> FastAPI:
     if not math.isfinite(tick_interval) or tick_interval <= 0:
         raise ValueError("tick_interval must be finite and positive")
@@ -580,10 +589,15 @@ def create_app(
     runtime = Runtime(engine, dev_controls, camera_config=camera_config or CameraConfig(),
                       perception_config=perception_config or PerceptionConfig(),
                       behaviour_config=behaviour_config or BehaviourConfig(),
-                      processor_factory=processor_factory, clock=clock, wall_clock=wall_clock)
+                      processor_factory=processor_factory, clock=clock, wall_clock=wall_clock,
+                      display_adapter=display_adapter)
 
     @asynccontextmanager
     async def lifespan(app):
+        if display_adapter is not None:
+            display_adapter.start()
+            async with runtime.lock:
+                runtime._publish_display(runtime.snapshot())
         await runtime.open_camera()
         ticker = asyncio.create_task(runtime.run(tick_interval)) if run_ticker else None
         try:
@@ -593,7 +607,11 @@ def create_app(
                 ticker.cancel()
                 with suppress(asyncio.CancelledError):
                     await ticker
-            await runtime.close()
+            try:
+                await runtime.close()
+            finally:
+                if display_adapter is not None:
+                    await asyncio.to_thread(display_adapter.close)
 
     app = FastAPI(title="Pomo simulator", lifespan=lifespan)
     app.state.runtime = runtime

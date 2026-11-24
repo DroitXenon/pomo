@@ -1,0 +1,220 @@
+// Pomo robot display adapter for the M5Stack CoreS3.
+//
+// The Python backend owns all behaviour. It sends one JSON line per display
+// change (and a heartbeat every 2 s) over USB serial, for example:
+//   {"v":1,"display":"sad","reminder":3,"stage":1,"sound":true,"standby":false}
+// This sketch only renders that state. If no line arrives for LINK_TIMEOUT_MS,
+// it shows the bored face with a "No link" note rather than a stale expression.
+
+#include <M5Unified.h>
+
+namespace {
+
+constexpr uint32_t LINK_TIMEOUT_MS = 6000;
+constexpr size_t MAX_LINE = 256;
+constexpr uint16_t BLACK = 0x0000;
+constexpr uint16_t WHITE = 0xFFFF;
+constexpr uint16_t GREY = 0xA514;
+
+enum class Face { Happy, Sad, Surprised, Bored, Idle };
+
+M5Canvas canvas(&M5.Display);
+char line[MAX_LINE + 1];
+size_t lineLength = 0;
+bool lineOverflow = false;
+
+Face face = Face::Bored;
+bool linked = false;
+bool sound = false;
+long reminderId = 0;
+uint32_t lastMessageAt = 0;
+bool dirty = true;
+
+bool parseFace(const char* name, Face& out) {
+  if (strcmp(name, "happy") == 0) out = Face::Happy;
+  else if (strcmp(name, "sad") == 0) out = Face::Sad;
+  else if (strcmp(name, "surprised") == 0) out = Face::Surprised;
+  else if (strcmp(name, "bored") == 0) out = Face::Bored;
+  else if (strcmp(name, "idle") == 0) out = Face::Idle;
+  else return false;
+  return true;
+}
+
+// Minimal field readers for the flat, backend-generated message. Unknown or
+// malformed lines are ignored, so the display keeps its last valid state.
+const char* findValue(const char* text, const char* key) {
+  char pattern[24];
+  snprintf(pattern, sizeof(pattern), "\"%s\":", key);
+  const char* at = strstr(text, pattern);
+  return at ? at + strlen(pattern) : nullptr;
+}
+
+bool readString(const char* text, const char* key, char* out, size_t size) {
+  const char* value = findValue(text, key);
+  if (!value || *value != '"') return false;
+  const char* end = strchr(++value, '"');
+  if (!end || size_t(end - value) >= size) return false;
+  memcpy(out, value, end - value);
+  out[end - value] = '\0';
+  return true;
+}
+
+bool readLong(const char* text, const char* key, long& out) {
+  const char* value = findValue(text, key);
+  if (!value) return false;
+  char* end = nullptr;
+  long parsed = strtol(value, &end, 10);
+  if (end == value) return false;
+  out = parsed;
+  return true;
+}
+
+bool readBool(const char* text, const char* key, bool& out) {
+  const char* value = findValue(text, key);
+  if (!value) return false;
+  if (strncmp(value, "true", 4) == 0) out = true;
+  else if (strncmp(value, "false", 5) == 0) out = false;
+  else return false;
+  return true;
+}
+
+void chime() {
+  M5.Speaker.tone(880, 120);
+  delay(150);
+  M5.Speaker.tone(660, 180);
+}
+
+void handleLine(const char* text) {
+  long version = 0;
+  char name[16];
+  Face next;
+  if (!readLong(text, "v", version) || version != 1) return;
+  if (!readString(text, "display", name, sizeof(name)) || !parseFace(name, next)) return;
+  long reminder = 0;
+  bool nextSound = false;
+  readLong(text, "reminder", reminder);
+  readBool(text, "sound", nextSound);
+
+  // A new active reminder ID gets one short chime; the laptop speaks the words.
+  if (reminder > 0 && reminder != reminderId && nextSound && linked) chime();
+  reminderId = reminder;
+  sound = nextSound;
+  lastMessageAt = millis();
+  if (!linked || next != face) dirty = true;
+  linked = true;
+  face = next;
+}
+
+void readSerial() {
+  while (Serial.available() > 0) {
+    int byte = Serial.read();
+    if (byte < 0) break;
+    if (byte == '\n') {
+      if (!lineOverflow && lineLength > 0) {
+        line[lineLength] = '\0';
+        handleLine(line);
+      }
+      lineLength = 0;
+      lineOverflow = false;
+    } else if (byte != '\r') {
+      if (lineLength < MAX_LINE) line[lineLength++] = char(byte);
+      else lineOverflow = true;
+    }
+  }
+}
+
+void drawEyes(int cx, int cy, int w, int h, int r, uint16_t color) {
+  canvas.fillRoundRect(cx - 60 - w / 2, cy - h / 2, w, h, r, color);
+  canvas.fillRoundRect(cx + 60 - w / 2, cy - h / 2, w, h, r, color);
+}
+
+void drawSmile(int cx, int cy, bool up) {
+  // Thick arc built from stacked circles; up = smile, down = frown.
+  for (int t = 0; t < 4; ++t) {
+    if (up) canvas.drawArc(cx, cy - 20, 40 - t, 40 - t, 30, 150, WHITE);
+    else canvas.drawArc(cx, cy + 30, 40 - t, 40 - t, 210, 330, WHITE);
+  }
+}
+
+void render() {
+  const int cx = canvas.width() / 2;
+  const int eyeY = 90;
+  const int mouthY = 165;
+  const uint32_t now = millis();
+  canvas.fillScreen(BLACK);
+
+  switch (face) {
+    case Face::Happy:
+      drawEyes(cx, eyeY, 30, 50, 12, WHITE);
+      drawSmile(cx, mouthY, true);
+      break;
+    case Face::Surprised:
+      canvas.fillCircle(cx - 60, eyeY, 24, WHITE);
+      canvas.fillCircle(cx + 60, eyeY, 24, WHITE);
+      canvas.fillCircle(cx - 60, eyeY, 9, BLACK);
+      canvas.fillCircle(cx + 60, eyeY, 9, BLACK);
+      canvas.drawCircle(cx, mouthY, 16, WHITE);
+      canvas.drawCircle(cx, mouthY, 15, WHITE);
+      canvas.drawCircle(cx, mouthY, 14, WHITE);
+      break;
+    case Face::Sad: {
+      drawEyes(cx, eyeY, 30, 40, 12, WHITE);
+      // Brows slanting outward-down.
+      canvas.drawWideLine(cx - 80, eyeY - 38, cx - 40, eyeY - 48, 4, WHITE);
+      canvas.drawWideLine(cx + 40, eyeY - 48, cx + 80, eyeY - 38, 4, WHITE);
+      drawSmile(cx, mouthY, false);
+      // Falling tears, animated so the crying face reads at a distance.
+      const int fall = (now / 40) % 50;
+      canvas.fillEllipse(cx - 60, eyeY + 32 + fall, 5, 8, GREY);
+      canvas.fillEllipse(cx + 60, eyeY + 32 + (fall + 25) % 50, 5, 8, GREY);
+      break;
+    }
+    case Face::Bored:
+      drawEyes(cx, eyeY + 10, 34, 14, 6, WHITE);
+      canvas.drawWideLine(cx - 28, mouthY, cx + 28, mouthY, 4, WHITE);
+      break;
+    case Face::Idle:
+      canvas.drawWideLine(cx - 75, eyeY, cx - 45, eyeY, 4, GREY);
+      canvas.drawWideLine(cx + 45, eyeY, cx + 75, eyeY, 4, GREY);
+      canvas.drawWideLine(cx - 15, mouthY, cx + 15, mouthY, 3, GREY);
+      break;
+  }
+
+  if (!linked) {
+    canvas.setTextColor(GREY);
+    canvas.setTextDatum(bottom_center);
+    canvas.drawString("No link", cx, canvas.height() - 8);
+  }
+  canvas.pushSprite(0, 0);
+}
+
+}  // namespace
+
+void setup() {
+  auto config = M5.config();
+  M5.begin(config);
+  Serial.begin(115200);
+  M5.Display.setBrightness(160);
+  M5.Speaker.setVolume(120);
+  canvas.setColorDepth(16);
+  canvas.createSprite(M5.Display.width(), M5.Display.height());
+  canvas.setTextSize(2);
+  render();
+}
+
+void loop() {
+  M5.update();
+  readSerial();
+  if (linked && millis() - lastMessageAt > LINK_TIMEOUT_MS) {
+    linked = false;
+    face = Face::Bored;
+    reminderId = 0;
+    dirty = true;
+  }
+  // The crying face animates; other faces redraw only when they change.
+  if (dirty || face == Face::Sad) {
+    render();
+    dirty = false;
+  }
+  delay(face == Face::Sad ? 30 : 10);
+}

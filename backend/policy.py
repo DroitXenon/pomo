@@ -13,15 +13,28 @@ from .observations import PRESENCES
 
 DISPLAYS = frozenset({"happy", "idle", "sad", "surprised", "bored"})
 SOURCES = frozenset({"simulated", "camera"})
-REMINDER_MESSAGE = "Ready to return to your study session?"
+REMINDER_MESSAGES = {
+    1: "I miss you. Please come back to your study when you're ready.",
+    2: "I'm still here. Come back to your study whenever you're ready.",
+}
+STAGE_NAMES = {1: "first", 2: "second"}
 
 
 @dataclass(frozen=True)
 class PolicyConfig:
-    absence_seconds: float = 5.0
-    cooldown_seconds: float = 30.0
+    """Timings, measured from the moment a face is first lost.
+
+    ``absence_seconds`` is the departure-to-first-reminder delay. The second
+    reminder follows ``repeat_seconds`` after the first, and standby begins
+    ``standby_seconds`` after the first. ``cooldown_seconds`` only spaces out
+    first reminders between separate departures.
+    """
+    absence_seconds: float = 10.0
+    cooldown_seconds: float = 0.0
     observation_timeout_seconds: float = 3.0
     uncertainty_seconds: float = 1.0
+    repeat_seconds: float = 300.0
+    standby_seconds: float = 600.0
 
     def __post_init__(self):
         for name, value in asdict(self).items():
@@ -31,6 +44,8 @@ class PolicyConfig:
             if value < 0 or (name != "cooldown_seconds" and value == 0):
                 raise ValueError(f"{name} must be positive" if name != "cooldown_seconds"
                                  else "cooldown_seconds must be non-negative")
+        if self.standby_seconds <= self.repeat_seconds:
+            raise ValueError("standby_seconds must be greater than repeat_seconds")
 
 
 class ReminderEngine:
@@ -57,7 +72,6 @@ class ReminderEngine:
         self.camera_status = "unavailable"
         self.observation_session = uuid4().hex
         self._presence = "unavailable"
-        self._transient_loss = False
         self._uncertain_since = None
         self._source = "none"
         self._observed_at = None
@@ -65,6 +79,10 @@ class ReminderEngine:
         self._initial_age = 0.0
         self._expires_at = None
         self._absence_started_at = None
+        self._reminder_stage = 0
+        self._first_reminder_at = None
+        self._last_reminder_at = None
+        self._standby = False
         self._cooldown_until = 0.0
         self._reminder_active = False
         self._reminder_id = 0
@@ -104,16 +122,46 @@ class ReminderEngine:
             self._reminder_active = False
             self.record("reminder_cleared", reason)
 
+    def _start_absence(self, departed_at):
+        if self._absence_started_at is None:
+            self._absence_started_at = departed_at
+            self.record("departure_detected",
+                        f"{self._source}: user away since {self._event_time(departed_at)}")
+
+    def _event_time(self, monotonic_at):
+        wall = self._wall_clock() - (self._clock() - monotonic_at)
+        return datetime.fromtimestamp(wall, timezone.utc).isoformat()
+
+    def _end_absence(self, kind, reason):
+        """Close a departure episode, logging how long after each cue it ended."""
+        if self._absence_started_at is None:
+            self._clear_reminder(reason)
+            return
+        now = self._clock()
+        away = now - self._absence_started_at
+        if self._standby:
+            detail = f"after standby; away {away:.1f}s"
+        elif self._reminder_stage:
+            detail = (f"{now - self._last_reminder_at:.1f}s after reminder {self._reminder_id} "
+                      f"({STAGE_NAMES[self._reminder_stage]}); away {away:.1f}s")
+        else:
+            detail = f"before any reminder; away {away:.1f}s"
+        self._clear_reminder(reason)
+        self.record(kind, f"{reason} {detail}")
+        self._absence_started_at = None
+        self._reminder_stage = 0
+        self._first_reminder_at = None
+        self._last_reminder_at = None
+        self._standby = False
+
     def _reset_observations(self):
         self._presence = "unavailable"
-        self._transient_loss = False
         self._uncertain_since = None
         self._source = "none"
         self._observed_at = None
         self._received_at = None
         self._initial_age = 0.0
         self._expires_at = None
-        self._absence_started_at = None
         self.camera_status = "unavailable"
 
     def _resting_state(self):
@@ -122,7 +170,7 @@ class ReminderEngine:
         return "bored"
 
     def invalidate_observations(self, reason: str, level: str = "warning"):
-        self._clear_reminder(reason)
+        self._end_absence("absence_interrupted", reason)
         self._reset_observations()
         self.observation_session = uuid4().hex
         self._transition(self._resting_state(), reason)
@@ -181,12 +229,9 @@ class ReminderEngine:
         self.record("display_preview", "Display preview cleared")
         return True
 
-    def observe(self, presence: str, source: str, observed_at: float, session_id: str,
-                *, transient_loss: bool = False):
+    def observe(self, presence: str, source: str, observed_at: float, session_id: str):
         if presence not in PRESENCES or source not in SOURCES:
             raise ValueError("Unknown observation presence or source")
-        if type(transient_loss) is not bool or (transient_loss and presence != "uncertain"):
-            raise ValueError("Transient loss requires an uncertain observation")
         if not self.powered_on or not self.monitoring_enabled:
             raise ValueError("Observations require power on and monitoring enabled")
         if session_id != self.observation_session:
@@ -205,15 +250,16 @@ class ReminderEngine:
 
         previous_presence, previous_source = self._presence, self._source
         previous_camera = self.camera_status
+        departed_at = now
         if presence == "uncertain":
             if self._uncertain_since is None:
                 self._uncertain_since = now
+            departed_at = self._uncertain_since
             effective_presence = "absent" if now - self._uncertain_since >= self.config.uncertainty_seconds else "uncertain"
         else:
             self._uncertain_since = None
             effective_presence = presence
         self._presence = effective_presence
-        self._transient_loss = transient_loss
         self._source = source
         self._observed_at = float(observed_at)
         self._received_at = now
@@ -225,12 +271,11 @@ class ReminderEngine:
                 previous_presence, previous_source, previous_camera):
             self.record("observation_changed", f"{source}: {presence}")
         if effective_presence == "absent":
-            if self._absence_started_at is None:
-                self._absence_started_at = now
+            self._start_absence(departed_at)
+        elif presence == "present":
+            self._end_absence("user_returned", "User returned")
         else:
-            self._absence_started_at = None
-            self._clear_reminder("Presence restored" if presence == "present"
-                                 else "Detection input unavailable or uncertain")
+            self._end_absence("absence_interrupted", "Detection input unavailable or uncertain")
         self._evaluate(now)
         return True
 
@@ -242,26 +287,55 @@ class ReminderEngine:
         if self._presence == "uncertain":
             if self._uncertain_since is not None and now - self._uncertain_since >= self.config.uncertainty_seconds:
                 self._presence = "absent"
-                self._absence_started_at = now
                 self.record("observation_changed", f"{self._source}: absent after sustained uncertainty")
+                self._start_absence(self._uncertain_since)
             else:
                 return self._transition("happy", "Detection input uncertain")
         if self._presence == "present":
             return self._transition("happy", "User present")
-        if self._reminder_active:
-            return self._transition("surprised", "Reminder active")
-        duration = now - self._absence_started_at
-        if duration >= self.config.absence_seconds and now >= self._cooldown_until:
-            self._reminder_id += 1
-            self._reminder_active = True
-            self._cooldown_until = now + self.config.cooldown_seconds
-            self.record("reminder_triggered", f"Reminder {self._reminder_id} triggered after sustained absence")
-            self._transition("surprised", "Sustained absence threshold reached")
-            return True
-        return self._transition("sad", "Absence observed")
+        if self._standby:
+            return self._transition("bored", "Standby")
+        config = self.config
+        if self._reminder_stage and now >= self._first_reminder_at + config.standby_seconds:
+            self._standby = True
+            self._clear_reminder("Standby")
+            self.record("standby_entered", f"No return {now - self._first_reminder_at:.1f}s after the first reminder")
+            return self._transition("bored", "Standby after no return")
+        if self._reminder_stage == 1 and now >= self._first_reminder_at + config.repeat_seconds:
+            self._trigger_reminder(2, now)
+            return self._transition("sad", "Second reminder") or True
+        if (not self._reminder_stage and now - self._absence_started_at >= config.absence_seconds
+                and now >= self._cooldown_until):
+            self._trigger_reminder(1, now)
+            self._first_reminder_at = now
+            self._cooldown_until = now + config.cooldown_seconds
+            return self._transition("sad", "Sustained absence threshold reached") or True
+        if self._reminder_stage:
+            return self._transition("sad", "Waiting for the user to return")
+        return self._transition("surprised", "Absence observed")
+
+    def _trigger_reminder(self, stage, now):
+        self._reminder_id += 1
+        self._reminder_stage = stage
+        self._reminder_active = True
+        self._last_reminder_at = now
+        self.record("reminder_triggered",
+                    f"Reminder {self._reminder_id} ({STAGE_NAMES[stage]}) after "
+                    f"{now - self._absence_started_at:.1f}s away")
+
+    def _next_step_seconds(self, now):
+        if self._absence_started_at is None or self._standby or self._presence != "absent":
+            return None
+        if not self._reminder_stage:
+            due = max(self._absence_started_at + self.config.absence_seconds, self._cooldown_until)
+        elif self._reminder_stage == 1:
+            due = self._first_reminder_at + self.config.repeat_seconds
+        else:
+            due = self._first_reminder_at + self.config.standby_seconds
+        return round(max(0.0, due - now), 3)
 
     def dismiss(self, reminder_id: int):
-        """Clear the active cue and guarantee a full quiet period after dismissal."""
+        """Silence the active cue; the second-reminder and standby schedule continue."""
         if (type(reminder_id) is not int or not self._reminder_active
                 or reminder_id != self._reminder_id):
             raise ValueError("Reminder is no longer active; refresh the current reminder")
@@ -269,8 +343,6 @@ class ReminderEngine:
         self._cooldown_until = max(self._cooldown_until,
                                    self._clock() + self.config.cooldown_seconds)
         self.record("reminder_dismissed", f"Reminder {reminder_id} dismissed")
-        # Dismissing a long-running cue must not let an already-expired cooldown
-        # cause a new cue on the next tick. Returning/pause also retain cooldown.
         self._transition("sad", "Reminder dismissed")
         return True
 
@@ -304,8 +376,12 @@ class ReminderEngine:
             },
             "absence_duration_seconds": duration,
             "cooldown_remaining_seconds": round(max(0.0, self._cooldown_until - now), 3),
+            "standby": self._standby,
+            "next_step_seconds": self._next_step_seconds(now),
             "reminder": {"active": self._reminder_active, "id": self._reminder_id,
-                         "message": REMINDER_MESSAGE if self._reminder_active else None},
+                         "stage": self._reminder_stage,
+                         "message": (REMINDER_MESSAGES[self._reminder_stage]
+                                     if self._reminder_active else None)},
             "settings": asdict(self.config),
             "events": [dict(event) for event in self._events],
         }
