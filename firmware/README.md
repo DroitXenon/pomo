@@ -6,9 +6,20 @@
 change from the backend over USB serial (format in
 [../docs/protocol.md](../docs/protocol.md#robot-display-serial)) and draws the five
 expressions in black and white with M5Unified: happy, surprised, crying `sad` with
-animated tears, bored and idle. A new reminder ID plays a short chime when sound is
-not muted; the laptop browser speaks the words. With no message for 6 seconds the
-device shows the bored face and "No link". It sends nothing back.
+animated tears, bored and idle. Each new reminder is spoken through the CoreS3
+speaker unless sound is muted; the browser stays silent while the robot is
+connected. With no message for 6 seconds the device shows the bored face and
+"No link". It sends nothing back.
+
+The spoken sentences are recorded clips in `include/clips.h` (about 3.6 s each,
+16 kHz mono, macOS voice "Flo (English (UK))"). They are generated from
+`REMINDER_MESSAGES` in `backend/policy.py`, so after changing that text run the
+following and upload again (a test fails if the clips are out of date):
+
+```sh
+conda run --name pomo python firmware/robot-adapter/tools/make_clips.py
+conda run --name pomo python firmware/robot-adapter/tools/make_clips.py --voice "Daniel (English (UK))"   # another voice
+```
 
 1. Open `firmware/robot-adapter` in VS Code with PlatformIO, or run `pio run -t upload`
    in that folder, with the CoreS3 connected by USB. Uploading replaces the current
@@ -18,8 +29,7 @@ device shows the bored face and "No link". It sends nothing back.
    `POMO_SERIAL_PORT=/dev/cu.usbmodem1101 sh scripts/dev.sh`, then enable monitoring
    in the simulator.
 
-`pio run` builds the sketch without a device. Rendering, the chime and the serial
-link have not yet been checked on hardware.
+`pio run` builds the sketch without a device.
 
 ## Display test
 

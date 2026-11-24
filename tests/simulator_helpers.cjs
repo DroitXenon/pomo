@@ -179,7 +179,7 @@ function snapshot(overrides = {}) {
     behavior_state: "happy", display: "happy", camera_status: "unavailable",
     observation: {presence: "unavailable", source: "none", observed_at: null, age_seconds: null},
     observation_session: "session-a", absence_duration_seconds: 0, cooldown_remaining_seconds: 0,
-    standby: false, next_step_seconds: null,
+    standby: false, next_step_seconds: null, robot_display: "disabled",
     reminder: {active: false, id: 0, stage: 0, message: null},
     settings: {absence_seconds: 10, cooldown_seconds: 0, observation_timeout_seconds: 3,
       repeat_seconds: 300, standby_seconds: 600},

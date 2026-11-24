@@ -288,7 +288,7 @@ and monitoring is paused. They temporarily override the displayed face without
 changing the actual policy state, activating a reminder or playing sound. Clear the
 preview, enable monitoring or change power to return to the actual state.
 
-Sound is on by default and can be muted. Enable audio through a user gesture in each tab. A newly received real reminder speaks its message once using browser speech synthesis (a short tone when speech is unavailable); initial/reconnect snapshots, preview expressions and repeated snapshots do not replay it. Browser audio restrictions or unsupported audio do not prevent visual reminders.
+Sound is on by default and can be muted. Enable audio through a user gesture in each tab. A newly received real reminder speaks its message once: through the CoreS3 speaker when the robot is connected, otherwise through browser speech synthesis (a short tone when speech is unavailable); initial/reconnect snapshots, preview expressions and repeated snapshots do not replay it. Browser audio restrictions or unsupported audio do not prevent visual reminders.
 
 ## HTTP and WebSocket Interface
 

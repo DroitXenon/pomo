@@ -61,7 +61,7 @@ function validSnapshot(next) {
       next.powered_on && next.monitoring_enabled && next.input_source === "camera" && next.camera_processor_ready)) &&
     typeof next.observation_session === "string" && next.observation_session.length > 0 &&
     finite(next.absence_duration_seconds) && finite(next.cooldown_remaining_seconds) &&
-    typeof next.standby === "boolean" && (next.next_step_seconds === null || finite(next.next_step_seconds)) &&
+    typeof next.standby === "boolean" && ["disabled", "connected", "unavailable"].includes(next.robot_display) && (next.next_step_seconds === null || finite(next.next_step_seconds)) &&
     object(next.observation) && Object.hasOwn(presenceLabels, next.observation.presence) &&
     object(next.camera_observation) && next.camera_observation.presence === next.observation.presence &&
     Object.hasOwn(sourceLabels, next.observation.source) &&
@@ -129,8 +129,10 @@ function stopTone() {
 function audioStatus() {
   const muted = state?.muted ?? true;
   const ready = audioContext?.state === "running";
-  $("audio-unlock").hidden = muted || ready;
+  const robot = state?.robot_display === "connected";
+  $("audio-unlock").hidden = muted || ready || robot;
   if (muted) setText("audio-status", "Sound muted");
+  else if (robot) setText("audio-status", "Sound enabled · the robot speaks reminders");
   else if (audioIssue) setText("audio-status", audioIssue);
   else if (!ready) setText("audio-status", "Sound enabled · enable audio in this tab to hear new reminders.");
   else setText("audio-status", "Sound enabled in this tab");
@@ -334,6 +336,7 @@ function render(next, initialSnapshot) {
   renderCameraDiagnostics(state);
   setText("absence-duration", seconds(state.absence_duration_seconds));
   setText("cooldown-status", seconds(state.cooldown_remaining_seconds));
+  setText("robot-display", {disabled: "Not configured", connected: "Connected", unavailable: "Unavailable"}[state.robot_display]);
   const stages = {0: "None", 1: "First", 2: "Second"};
   setText("reminder-stage", state.standby ? "Standby" : stages[state.reminder.stage]);
   setText("next-step", state.next_step_seconds === null ? "—" : seconds(state.next_step_seconds));
@@ -357,7 +360,8 @@ function render(next, initialSnapshot) {
     const unseen = !seenReminders.has(key);
     seenReminders.add(key);
     while (seenReminders.size > 100) seenReminders.delete(seenReminders.values().next().value);
-    if (unseen && !initialSnapshot && !state.muted && state.powered_on && state.monitoring_enabled) playCue(state.reminder.message);
+    if (unseen && !initialSnapshot && !state.muted && state.powered_on && state.monitoring_enabled &&
+      state.robot_display !== "connected") playCue(state.reminder.message);
   }
 }
 

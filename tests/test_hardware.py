@@ -137,6 +137,7 @@ class RecordingAdapter:
         self.published = []
         self.started = self.closed = False
         self.fail = fail
+        self.status = "disconnected"
 
     def start(self):
         self.started = True
@@ -148,6 +149,20 @@ class RecordingAdapter:
 
     def close(self):
         self.closed = True
+
+
+def test_snapshot_reports_robot_display_status():
+    adapter = RecordingAdapter()
+    app = create_app(config=PolicyConfig(), run_ticker=False, processor_factory=DecodeProcessor,
+                     display_adapter=adapter)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        assert ws.receive_json()["robot_display"] == "unavailable"
+        adapter.status = "connected"
+        ws.send_json({"type": "set_muted", "muted": False})
+        assert ws.receive_json()["robot_display"] == "connected"
+    plain = create_app(config=PolicyConfig(), run_ticker=False, processor_factory=DecodeProcessor)
+    with TestClient(plain) as client, client.websocket_connect("/ws") as ws:
+        assert ws.receive_json()["robot_display"] == "disabled"
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -174,3 +189,11 @@ def test_serial_settings_are_optional_and_validated():
     for value in ("0", "fast"):
         with pytest.raises(ValueError, match="POMO_SERIAL_BAUDRATE"):
             Settings.from_env({"POMO_SERIAL_BAUDRATE": value})
+
+
+def test_firmware_clips_match_reminder_messages():
+    from pathlib import Path
+    from backend.policy import REMINDER_MESSAGES
+    header = (Path(__file__).resolve().parents[1] / "firmware/robot-adapter/include/clips.h").read_text()
+    for stage, text in REMINDER_MESSAGES.items():
+        assert f"// Stage {stage}: {text}\n" in header, "rerun firmware/robot-adapter/tools/make_clips.py"

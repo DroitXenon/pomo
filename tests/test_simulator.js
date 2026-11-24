@@ -158,3 +158,21 @@ test("each new reminder speaks its message and mute or clearing cancels speech",
   await b.click("sound");
   assert.equal(b.speech.speaking, false, "mute cancels speech");
 });
+
+test("a connected robot speaks reminders instead of the browser", async () => {
+  const b = browser({speechSupport: true});
+  const socket = b.sockets[0];
+  const base = {monitoring_enabled: true, muted: false, display: "sad", behavior_state: "sad", robot_display: "connected"};
+  socket.receive(snapshot({...base, display: "surprised", behavior_state: "surprised"}));
+  assert.equal(b.elements["audio-unlock"].hidden, true, "no browser audio unlock is needed");
+  assert.ok(b.elements["audio-status"].textContent.includes("robot speaks"));
+  assert.equal(b.elements["robot-display"].textContent, "Connected");
+  socket.receive(snapshot({...base, revision: 1, reminder: {active: true, id: 1, stage: 1, message: "I miss you."}}));
+  assert.equal(b.spoken.length, 0);
+  assert.equal(b.tones.length, 0);
+  assert.equal(b.elements["reminder-panel"].hidden, false, "the visual reminder and dismissal remain");
+  socket.receive(snapshot({...base, revision: 2, robot_display: "unavailable"}));
+  await b.click("audio-unlock");
+  socket.receive(snapshot({...base, revision: 3, robot_display: "unavailable", reminder: {active: true, id: 2, stage: 2, message: "Still here."}}));
+  assert.deepEqual(b.spoken.map((u) => u.text), ["Still here."], "the browser speaks when the robot is unavailable");
+});

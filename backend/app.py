@@ -163,6 +163,7 @@ class Runtime:
             "instance_id": self.instance_id, "revision": self.revision,
             "dev_controls": self.dev_controls, **engine_snapshot,
             "input_source": self.input_source,
+            "robot_display": self.robot_display_status(),
             "camera_processor_ready": self.worker_ready,
             "camera_capture_status": self.camera_capture_status,
             "camera_settings": self.camera_config.browser_settings(),
@@ -188,6 +189,12 @@ class Runtime:
                 )
                 LOG.log(level, "%s: %s", event["kind"], event["message"])
                 self._last_logged = event["id"]
+
+    def robot_display_status(self):
+        """disabled without a serial port; connected while the port is open."""
+        if self.display_adapter is None:
+            return "disabled"
+        return "connected" if getattr(self.display_adapter, "status", None) == "connected" else "unavailable"
 
     def _publish_display(self, snapshot):
         """Hand the snapshot to the optional robot display without blocking."""

@@ -76,6 +76,7 @@ The following example shows the complete shape; instance/session IDs, revision a
   },
   "events": [],
   "input_source": "camera",
+  "robot_display": "disabled",
   "camera_session": null,
   "camera_processor_ready": true,
   "camera_capture_status": "paused",
@@ -108,6 +109,7 @@ The following example shows the complete shape; instance/session IDs, revision a
 | `observation_session` | Opaque token producers must copy from the latest snapshot |
 | `absence_duration_seconds` | Time since the user left, including the initial uncertainty; resets on recovery, unavailable input, pause or input gaps |
 | `cooldown_remaining_seconds` | Remaining quiet period, clamped to zero |
+| `robot_display` | `disabled` (no `POMO_SERIAL_PORT`), `connected` (serial port open) or `unavailable`. While `connected`, the robot speaks reminders and the browser stays silent |
 | `standby` | True after `standby_seconds` without return; display `bored`, no further reminders until the user returns |
 | `next_step_seconds` | Seconds until the next first/second reminder or standby, or `null` |
 | `reminder.stage` | `0` none, `1` first reminder, `2` second reminder; resets when the departure ends |
@@ -391,6 +393,8 @@ When `POMO_SERIAL_PORT` names a device (for example `/dev/cu.usbmodem1101` on ma
 
 A message is queued whenever a published snapshot changes these fields; only the newest pending message is kept. A dedicated thread writes it, so the event loop never blocks on the port, and repeats the last message every 2 seconds as a heartbeat. A missing or unplugged device is logged once as unavailable and reopened every 2 seconds; it never stops the server. The firmware in `firmware/robot-adapter` shows the bored face with "No link" when no line arrives for 6 seconds. The device does not send commands; dismissal and controls remain in the simulator.
 
+The firmware speaks each new non-zero `reminder` once through the CoreS3 speaker, using recorded clips of the stage 1 and stage 2 messages. The first message after the link starts is silent, so an old reminder is never replayed. Speech stops when `reminder` becomes 0 (return, dismissal or standby), when `sound` becomes false, or when the link times out. While `robot_display` is `connected`, the simulator does not speak or play its tone.
+
 ## Debug Events and Errors
 
 Events include an increasing integer `id`, UTC ISO-8601 `at`, `level` (`info`, `warning` or `error`), `kind` and bounded `message`. They record transitions, reminder activity, source changes, lifecycle changes, connections and command rejections. Unchanged observation heartbeats do not add log entries.
@@ -413,7 +417,7 @@ No frame/image/video fields are accepted in JSON commands. JPEG bodies belong on
 
 The simulator retries after 1, 2, 4 and 8 seconds, then at most every 10 seconds. Controls remain disabled until a valid snapshot arrives. While disconnected, the previous display is marked stale, simulated-input heartbeats and any local tone stop, and commands are not queued.
 
-On reconnect, restore the current snapshot and require a new simulated-input selection. The first snapshot never plays an old reminder sound. Subsequent newly observed active reminders speak the reminder message once per audio-enabled tab using browser speech synthesis, falling back to a short tone when speech is unavailable, identified by `instance_id:reminder.id`. Clearing the reminder, muting, pausing, powering off or disconnecting cancels speech. Manual previews, mute/unmute and later snapshots of the same reminder do not replay sound.
+On reconnect, restore the current snapshot and require a new simulated-input selection. The first snapshot never plays an old reminder sound. Unless the robot display is connected, subsequent newly observed active reminders speak the reminder message once per audio-enabled tab using browser speech synthesis, falling back to a short tone when speech is unavailable, identified by `instance_id:reminder.id`. Clearing the reminder, muting, pausing, powering off or disconnecting cancels speech. Manual previews, mute/unmute and later snapshots of the same reminder do not replay sound.
 
 A backend restart creates a new instance ID, resets reminder/event counters and revision, powers the simulated robot on with monitoring paused, and clears observations/cooldowns. Sound preference resets to the configured startup default.
 

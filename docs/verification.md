@@ -351,3 +351,9 @@ Fake-clock policy checks cover the 0.999/1.000-second boundary, subsequent remin
 - Full suite: 290 passed, with the existing Starlette/HTTPX deprecation warning.
 - `pio run` in `firmware/robot-adapter` built for `m5stack-cores3` without warnings in the sketch (RAM 7.2%, flash 8.3%).
 - The firmware was not uploaded. Rendering, the chime, USB serial with a real device, reconnection after unplugging and the study viewing distance remain untested.
+
+## CoreS3 speaker — 24 November 2026
+
+- The two reminder sentences were recorded with macOS `say` (voice "Flo (English (UK))") into 16 kHz mono WAV clips in `firmware/robot-adapter/include/clips.h`, generated from `REMINDER_MESSAGES`. A pytest check fails if the clips no longer match the text.
+- `pio run` built the firmware without warnings in the sketch (flash 11.9%).
+- New checks: the snapshot reports `robot_display` (`disabled`, `unavailable`, `connected`); while connected the simulator neither speaks nor plays its tone, but still shows the visual reminder and dismissal. Python: 292 passed. Node: 44 passed.
