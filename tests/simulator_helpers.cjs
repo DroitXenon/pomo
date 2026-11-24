@@ -12,7 +12,10 @@ function browser({audioSupport = true, audioResumeFails = false, speechSupport =
     constructor() {
       this.textWrites = 0;
       let content = "";
-      Object.defineProperty(this, "textContent", {get: () => content, set: (value) => { content = value; this.textWrites++; }});
+      Object.defineProperty(this, "textContent", {
+        get: () => content || this.children.map((child) => child.textContent).join(" "),
+        set: (value) => { content = value; this.textWrites++; }
+      });
       this.children = [];
       this.datasetWrites = {};
       this.dataset = new Proxy({}, {set: (target, name, value) => { this.datasetWrites[name] = (this.datasetWrites[name] || 0) + 1; target[name] = value; return true; }});
@@ -25,6 +28,7 @@ function browser({audioSupport = true, audioResumeFails = false, speechSupport =
     getContext() { return this.context; }
     setAttribute(name, value) { this.attributes[name] = value; }
     prepend(child) { child.parent = this; this.children.unshift(child); }
+    append(...children) { for (const child of children) { child.parent = this; this.children.push(child); } }
     replaceChildren(...children) {
       this.children = children;
       for (const child of children) child.parent = this;
@@ -49,6 +53,11 @@ function browser({audioSupport = true, audioResumeFails = false, speechSupport =
   const sources = [...html.matchAll(/data-source="([^"]+)"/g)].map((match) => {
     const element = new Element();
     element.dataset.source = match[1];
+    return element;
+  });
+  const filters = [...html.matchAll(/data-filter="([^"]+)"/g)].map((match) => {
+    const element = new Element();
+    element.dataset.filter = match[1];
     return element;
   });
   const cameras = [];
@@ -141,7 +150,7 @@ function browser({audioSupport = true, audioResumeFails = false, speechSupport =
       addEventListener(name, fn) { listeners[name] = fn; },
       getElementById: (id) => elements[id],
       createElement: () => new Element(),
-      querySelectorAll: (selector) => selector === "[data-observation]" ? observations : selector === "[data-preview]" ? previews : selector === "[data-source]" ? sources : []
+      querySelectorAll: (selector) => selector === "[data-observation]" ? observations : selector === "[data-preview]" ? previews : selector === "[data-source]" ? sources : selector === "[data-filter]" ? filters : []
   };
   vm.runInNewContext(code, {
     document, window, location, URL, WebSocket: Socket, CameraController: Camera, Date: ClockDate,
@@ -151,7 +160,7 @@ function browser({audioSupport = true, audioResumeFails = false, speechSupport =
     clearInterval: (id) => timers.delete(id)
   }, {filename: "simulator/app.js"});
   return {
-    elements, observations, previews, sources, cameras, sockets, tones, spoken, speech, listeners, document,
+    elements, observations, previews, sources, filters, cameras, sockets, tones, spoken, speech, listeners, document,
     click(id) {
       const element = typeof id === "string" ? elements[id] : id;
       assert.equal(element.disabled, false);

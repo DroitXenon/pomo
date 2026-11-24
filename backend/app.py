@@ -275,14 +275,14 @@ class Runtime:
                 self.revision += 1
                 await self._broadcast_locked()
             self.clients.add(ws)
-            self.engine.record("client_connected", "Simulator/producer connected.")
+            self.engine.record("client_connected", "Client connected.")
             self._log_events()
             await self._send(ws, self.snapshot(ws))
 
     async def disconnect(self, ws):
         async with self.lock:
             self.clients.discard(ws)
-            self.engine.record("client_disconnected", "Simulator/producer disconnected.")
+            self.engine.record("client_disconnected", "Client disconnected.")
             if self.camera_owner is ws:
                 self._camera_failed("Camera source disconnected.")
                 self.revision += 1

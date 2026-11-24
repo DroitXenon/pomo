@@ -30,7 +30,7 @@ function log(message) {
   const item = document.createElement("li");
   item.textContent = `${new Date().toLocaleTimeString()}  ${message}`;
   $("journal").prepend(item);
-  while ($("journal").children.length > 12) $("journal").lastChild.remove();
+  while ($("journal").children.length > 100) $("journal").lastChild.remove();
 }
 
 function feedback(message) {
@@ -133,10 +133,10 @@ function audioStatus() {
   const robot = state?.robot_display === "connected";
   $("audio-unlock").hidden = muted || ready || robot;
   if (muted) setText("audio-status", "Sound muted");
-  else if (robot) setText("audio-status", "Sound enabled · the robot speaks reminders");
+  else if (robot) setText("audio-status", "Sound on · the robot speaks reminders");
   else if (audioIssue) setText("audio-status", audioIssue);
-  else if (!ready) setText("audio-status", "Sound enabled · enable audio in this tab to hear new reminders.");
-  else setText("audio-status", "Sound enabled in this tab");
+  else if (!ready) setText("audio-status", "Sound on");
+  else setText("audio-status", "Sound on in this tab");
 }
 
 async function unlockAudio() {
@@ -204,18 +204,103 @@ function playCue(message) {
   }
 }
 
-function renderEvents(events) {
-  const items = events.slice(-100).filter((entry) =>
-    entry && Number.isSafeInteger(entry.id) && entry.id > clearedEventsThrough &&
-    typeof entry.at === "string" && typeof entry.kind === "string" && typeof entry.message === "string"
-  ).reverse().map((entry) => {
-    const item = document.createElement("li");
-    const date = new Date(entry.at);
-    const time = Number.isNaN(date.getTime()) ? "—" : date.toLocaleTimeString();
-    item.textContent = `${time}  ${entry.kind}: ${entry.message}`;
-    return item;
+// The backend sends only its latest 100 events, so the page keeps a longer
+// per-instance history for this tab (not persisted, not shared).
+const EVENT_HISTORY_LIMIT = 2000, EVENT_ROWS_LIMIT = 500;
+const eventHistory = new Map();
+let historyInstance = null, logFilter = "all", logQuery = "", lastLogSignature = "";
+const eventGroups = {
+  study: new Set(["departure_detected", "reminder_triggered", "reminder_dismissed", "reminder_cleared",
+    "standby_entered", "user_returned", "absence_interrupted"]),
+  state: new Set(["state_changed", "observation_changed", "display_preview", "monitoring_changed",
+    "power_changed", "sound_changed"]),
+  input: new Set(["camera_started", "camera_unavailable", "input_source_changed", "observations_invalidated",
+    "client_connected", "client_disconnected", "command_rejected"])
+};
+
+function validEvent(entry) {
+  return entry && Number.isSafeInteger(entry.id) && typeof entry.at === "string" &&
+    typeof entry.kind === "string" && typeof entry.message === "string" &&
+    ["info", "warning", "error"].includes(entry.level);
+}
+
+function visibleHistory() {
+  return [...eventHistory.values()].filter((entry) => entry.id > clearedEventsThrough);
+}
+
+function matchesFilter(entry) {
+  if (logFilter === "warnings" && entry.level === "info") return false;
+  if (eventGroups[logFilter] && !eventGroups[logFilter].has(entry.kind)) return false;
+  return !logQuery || `${entry.kind} ${entry.message}`.toLowerCase().includes(logQuery);
+}
+
+function median(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b), middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function renderStats(entries) {
+  const count = (kind, text) => entries.filter((entry) => entry.kind === kind && (!text || entry.message.includes(text))).length;
+  const latencies = entries.filter((entry) => entry.kind === "user_returned")
+    .map((entry) => /returned ([\d.]+)s after reminder/.exec(entry.message)).filter(Boolean).map((match) => Number(match[1]));
+  setText("stat-departures", String(count("departure_detected")));
+  setText("stat-first", String(count("reminder_triggered", "(first)")));
+  setText("stat-second", String(count("reminder_triggered", "(second)")));
+  setText("stat-standby", String(count("standby_entered")));
+  setText("stat-returns", String(count("user_returned")));
+  const middle = median(latencies);
+  setText("stat-latency", middle === null ? "—" : `${middle.toFixed(1)} s`);
+}
+
+function eventRow(entry) {
+  const item = document.createElement("li");
+  item.dataset.level = entry.level;
+  const date = new Date(entry.at);
+  const cells = [Number.isNaN(date.getTime()) ? "—" : date.toLocaleTimeString(), entry.level, entry.kind, entry.message];
+  ["time", "level", "kind", "message"].forEach((name, index) => {
+    const cell = document.createElement("span");
+    cell.className = `log-${name}`;
+    cell.textContent = cells[index];
+    item.append(cell);
   });
-  $("events").replaceChildren(...items);
+  item.title = `${entry.at}  ${entry.kind}: ${entry.message}`;
+  return item;
+}
+
+function renderEvents(events) {
+  if (state && historyInstance !== state.instance_id) {
+    eventHistory.clear();
+    historyInstance = state.instance_id;
+  }
+  for (const entry of events.slice(-100)) if (validEvent(entry)) eventHistory.set(entry.id, entry);
+  while (eventHistory.size > EVENT_HISTORY_LIMIT) eventHistory.delete(eventHistory.keys().next().value);
+  const lastId = Math.max(0, ...eventHistory.keys());
+  const signature = `${historyInstance}:${lastId}:${eventHistory.size}:${clearedEventsThrough}:${logFilter}:${logQuery}`;
+  if (signature === lastLogSignature) return;
+  lastLogSignature = signature;
+  const entries = visibleHistory();
+  const shown = entries.filter(matchesFilter);
+  $("events").replaceChildren(...shown.slice(-EVENT_ROWS_LIMIT).reverse().map(eventRow));
+  setText("log-count", !entries.length ? "No events" :
+    shown.length === entries.length ? `${entries.length} event${entries.length === 1 ? "" : "s"}` :
+      `${shown.length} of ${entries.length} events`);
+  $("export-log").disabled = !entries.length;
+  renderStats(entries);
+}
+
+function exportLog() {
+  const entries = visibleHistory();
+  if (!entries.length || typeof Blob !== "function" || !window.URL?.createObjectURL) return;
+  const clean = (text) => String(text).replace(/[\t\r\n]+/g, " ");
+  const lines = ["time\tlevel\tevent\tmessage", ...entries.map((entry) =>
+    [entry.at, entry.level, entry.kind, entry.message].map(clean).join("\t"))];
+  const url = URL.createObjectURL(new Blob([lines.join("\n") + "\n"], {type: "text/tab-separated-values"}));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `pomo-log-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.tsv`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function clearOverlay() {
@@ -531,9 +616,32 @@ document.querySelectorAll("[data-preview]").forEach((button) => {
 $("clear-preview").onclick = () => send({type: "clear_preview"});
 $("clear").onclick = () => {
   $("journal").replaceChildren();
-  clearedEventsThrough = Math.max(0, ...(state?.events || []).map((entry) => Number.isSafeInteger(entry.id) ? entry.id : 0));
+  clearedEventsThrough = Math.max(clearedEventsThrough, 0, ...eventHistory.keys(),
+    ...(state?.events || []).map((entry) => Number.isSafeInteger(entry.id) ? entry.id : 0));
   renderEvents(state?.events || []);
 };
+$("export-log").onclick = exportLog;
+document.querySelectorAll("[data-filter]").forEach((button) => {
+  button.onclick = () => {
+    logFilter = button.dataset.filter;
+    document.querySelectorAll("[data-filter]").forEach((other) => other.setAttribute("aria-pressed", String(other === button)));
+    renderEvents(state?.events || []);
+  };
+});
+$("log-search").oninput = () => {
+  logQuery = String($("log-search").value || "").trim().toLowerCase().slice(0, 100);
+  renderEvents(state?.events || []);
+};
+for (const [tab, view, other, otherView] of [["tab-events", "events-view", "tab-journal", "journal-view"],
+  ["tab-journal", "journal-view", "tab-events", "events-view"]]) {
+  $(tab).onclick = () => {
+    $(tab).setAttribute("aria-selected", "true");
+    $(other).setAttribute("aria-selected", "false");
+    $(view).hidden = false;
+    $(otherView).hidden = true;
+    $("log-filters").hidden = $("log-search").hidden = tab === "tab-journal";
+  };
+}
 window.addEventListener("pagehide", () => {
   stopped = true;
   connected = false;
@@ -556,3 +664,87 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 connect();
+
+
+// Adjustable split between the top panels and the session log (desktop layout
+// only). The chosen share is remembered in this browser; double-click resets.
+(() => {
+  const query = window.matchMedia?.("(min-width: 701px) and (min-height: 600px)");
+  const workspace = $("workspace"), splitter = $("layout-splitter");
+  if (!query || !workspace || !splitter || typeof getComputedStyle !== "function") return;
+  const KEY = "pomo.layout.topShare", MIN_TOP = 160, MIN_LOG = 300;
+  let share = null;
+  try {
+    const saved = Number(localStorage.getItem(KEY));
+    if (saved >= 0.15 && saved <= 0.8) share = saved;
+  } catch {}
+
+  const available = () => {
+    const main = workspace.parentElement, style = getComputedStyle(main);
+    return main.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) - splitter.offsetHeight;
+  };
+  const show = (top, total) => {
+    const percent = Math.round(top / total * 100);
+    splitter.setAttribute("aria-valuenow", String(percent));
+    splitter.setAttribute("aria-valuetext", `Top ${percent}%, log ${100 - percent}%`);
+    setText("layout-split-label", `Top ${percent}% · Log ${100 - percent}%`);
+  };
+  const apply = () => {
+    if (!query.matches) {
+      workspace.style.removeProperty("grid-template-rows");
+      return;
+    }
+    const total = available();
+    if (total <= 0) return;
+    if (share === null) {
+      workspace.style.removeProperty("grid-template-rows");
+      show(workspace.getBoundingClientRect().height, total);
+      return;
+    }
+    const top = Math.round(Math.min(Math.max(share * total, MIN_TOP), Math.max(MIN_TOP, total - MIN_LOG)));
+    workspace.style.gridTemplateRows = `${top}px`;
+    show(top, total);
+  };
+  const save = () => {
+    try { share === null ? localStorage.removeItem(KEY) : localStorage.setItem(KEY, share.toFixed(3)); } catch {}
+  };
+  const setShare = (next) => {
+    share = Math.min(0.8, Math.max(0.15, next));
+    apply();
+  };
+
+  splitter.addEventListener("pointerdown", (event) => {
+    if (!query.matches || event.button !== 0) return;
+    event.preventDefault();
+    splitter.setPointerCapture(event.pointerId);
+    splitter.dataset.dragging = "true";
+    document.body.dataset.resizing = "true";
+  });
+  splitter.addEventListener("pointermove", (event) => {
+    if (splitter.dataset.dragging !== "true") return;
+    setShare((event.clientY - workspace.getBoundingClientRect().top - splitter.offsetHeight / 2) / available());
+  });
+  const stop = () => {
+    if (splitter.dataset.dragging !== "true") return;
+    splitter.dataset.dragging = "false";
+    document.body.dataset.resizing = "false";
+    save();
+  };
+  splitter.addEventListener("pointerup", stop);
+  splitter.addEventListener("pointercancel", stop);
+  splitter.addEventListener("dblclick", () => { share = null; save(); apply(); });
+  splitter.addEventListener("keydown", (event) => {
+    const current = share ?? workspace.getBoundingClientRect().height / available();
+    const steps = {ArrowUp: -0.02, ArrowDown: 0.02, PageUp: -0.1, PageDown: 0.1};
+    if (event.key in steps) setShare(current + steps[event.key]);
+    else if (event.key === "Home") setShare(0.15);
+    else if (event.key === "End") setShare(0.8);
+    else if (event.key === "Enter" || event.key === "Escape") share = null, apply();
+    else return;
+    event.preventDefault();
+    save();
+  });
+  window.addEventListener("resize", apply);
+  query.addEventListener?.("change", apply);
+  apply();
+})();
