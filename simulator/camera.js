@@ -22,7 +22,11 @@ class CameraController {
     const session = active && state.camera_processor_ready === true ? state.camera_session : null;
     if (!session) {
       this.stop();
-      this.status.textContent = state.input_source !== "camera" ? "Camera off · simulated input selected" :
+      this.status.textContent = state.input_source === "simulated" ? "Camera off · simulated input selected" :
+        state.input_source === "robot" ? (state.camera_capture_status === "available" ? "Robot camera active" :
+          state.camera_capture_status === "starting" ? "Starting robot camera" :
+          state.camera_capture_status === "unavailable" ? "Robot camera unavailable · retry when the robot is connected" :
+          "Robot camera paused") :
         !state.powered_on ? "Camera off" :
         !state.camera_processor_ready ? "Camera processor unavailable · check backend logs" :
         state.camera_capture_status === "unavailable" ? (this.failure || "Camera unavailable · retry camera when ready") :

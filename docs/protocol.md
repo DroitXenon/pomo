@@ -1,13 +1,15 @@
-# Protocol v9
+# Protocol v10
 
 The backend serves the simulator at `/`, reports health at `/health` and accepts WebSocket connections at `/ws` on the same origin. Use `ws` for HTTP and `wss` for HTTPS.
 
-Version 9 unifies presence values as `present`, `absent`, `uncertain` and `unavailable`. `camera_observation.presence` and `observation.presence` are the same shared value in every snapshot. Update backend and simulator together; v8 and earlier clients are incompatible.
+Version 10 adds the `robot` input source (the CoreS3 camera over USB serial) and adopts the team proposal's reminder sequence: `surprised` while the user has just left, `sad` (crying) with a spoken first reminder, a second reminder, then `bored` standby. It adds `standby`, `next_step_seconds`, `reminder.stage` and the `repeat_seconds`/`standby_seconds` settings, and new debug event kinds for study timing. Display identifiers and commands are unchanged, but the meaning of `sad` and `surprised` changed, so firmware and simulator must be updated together; v9 and earlier clients are incompatible.
+
+Version 9 unified presence values as `present`, `absent`, `uncertain` and `unavailable`. `camera_observation.presence` and `observation.presence` are the same shared value in every snapshot.
 
 `GET /health` returns:
 
 ```json
-{"status":"ok","phase":2,"protocol_version":9,"camera_processor_ready":true}
+{"status":"ok","phase":2,"protocol_version":10,"camera_processor_ready":true}
 ```
 
 ## Transport and State Ownership
@@ -36,7 +38,7 @@ The following example shows the complete shape; instance/session IDs, revision a
 ```json
 {
   "type": "state",
-  "protocol_version": 9,
+  "protocol_version": 10,
   "instance_id": "6fe3ecf8-69bc-468d-b690-5dc162dc9393",
   "revision": 0,
   "dev_controls": true,
@@ -56,18 +58,25 @@ The following example shows the complete shape; instance/session IDs, revision a
   },
   "absence_duration_seconds": 0.0,
   "cooldown_remaining_seconds": 0.0,
+  "standby": false,
+  "next_step_seconds": null,
   "reminder": {
     "active": false,
     "id": 0,
+    "stage": 0,
     "message": null
   },
   "settings": {
-    "absence_seconds": 5.0,
-    "cooldown_seconds": 30.0,
-    "observation_timeout_seconds": 3.0
+    "absence_seconds": 10.0,
+    "cooldown_seconds": 0.0,
+    "observation_timeout_seconds": 3.0,
+    "uncertainty_seconds": 1.0,
+    "repeat_seconds": 300.0,
+    "standby_seconds": 600.0
   },
   "events": [],
   "input_source": "camera",
+  "robot_display": "disabled",
   "camera_session": null,
   "camera_processor_ready": true,
   "camera_capture_status": "paused",
@@ -98,8 +107,12 @@ The following example shows the complete shape; instance/session IDs, revision a
 | `observation.observed_at` | Last accepted source timestamp, in Unix seconds, or `null` |
 | `observation.age_seconds` | Source age on receipt plus subsequent monotonic elapsed time, or `null` |
 | `observation_session` | Opaque token producers must copy from the latest snapshot |
-| `absence_duration_seconds` | Current continuous absence window; resets on recovery, uncertain/unavailable input, pause or input gaps |
+| `absence_duration_seconds` | Time since the user left, including the initial uncertainty; resets on recovery, unavailable input, pause or input gaps |
 | `cooldown_remaining_seconds` | Remaining quiet period, clamped to zero |
+| `robot_display` | `disabled` (no `POMO_SERIAL_PORT`), `connected` (serial port open) or `unavailable`. While `connected`, the robot speaks reminders and the browser stays silent |
+| `standby` | True after `standby_seconds` without return; display `bored`, no further reminders until the user returns |
+| `next_step_seconds` | Seconds until the next first/second reminder or standby, or `null` |
+| `reminder.stage` | `0` none, `1` first reminder, `2` second reminder; resets when the departure ends |
 | `reminder.id` | Counter increased only when a real reminder is triggered; use with `instance_id` to identify a cue |
 | `reminder.active` / `message` | Whether a real visual reminder is active and its supportive text; message is `null` when inactive |
 | `events` | Up to 100 recent backend events in oldest-to-newest order |
@@ -138,7 +151,10 @@ Booleans must be JSON booleans, not strings or numbers. Commands accept only the
 ```json
 {"type":"set_input_source","source":"camera"}
 {"type":"set_input_source","source":"simulated"}
+{"type":"set_input_source","source":"robot"}
 ```
+
+`robot` uses the CoreS3 camera through the serial adapter (see "Robot Display Serial") and is rejected when `POMO_SERIAL_PORT` is not configured. Enabling monitoring in robot mode requires `robot_display` to be `connected`. The robot session has no browser owner: every peer receives `camera_session: null`, and frames go through the same checks, size limit, processor and presence normalisation as `/camera/frame`. Timeouts work as for the browser camera, and losing the serial link marks the camera unavailable; pause and enable monitoring (or Retry camera) to start again.
 
 Source changes require power on and monitoring paused. Simulated mode requires
 development controls. Source changes discard input and rotate observation tokens.
@@ -157,7 +173,7 @@ be replaced by a synthetic packet while camera mode is selected.
 ```
 
 - Enabling monitoring requires power on. An actual monitoring change clears the preview, input and active reminder, rotates the observation-session token and requires fresh observations.
-- Pausing monitoring returns behaviour to `happy` and preserves any remaining cooldown.
+- Pausing monitoring returns behaviour to `bored`, ends any departure and preserves any remaining cooldown.
 - `set_power` is a soft power control. Power off enters `idle`, disables monitoring and clears input, preview, active reminder and cooldown. It does not terminate HTTP or WebSocket serving.
 - Power on returns to `bored` with monitoring paused. Repeating an unchanged power or monitoring setting is idempotent at policy level, although an accepted command still receives a new revision.
 
@@ -171,7 +187,7 @@ be replaced by a synthetic packet while camera mode is selected.
 
 Mute is a shared preference. It does not change reminder IDs or trigger a new reminder. The browser needs a user gesture to unlock its local audio context; visual reminders work when audio is unavailable.
 
-Dismissal requires a strict positive integer matching the currently active reminder. A stale or inactive ID is rejected. Dismissal clears the visual cue, returns ongoing absence to `sad` and ensures a full new cooldown using `max(existing_deadline, dismissal_time + cooldown)`.
+Dismissal requires a strict positive integer matching the currently active reminder. A stale or inactive ID is rejected. Dismissal silences the current cue and hides its message; the face stays `sad`, and the second reminder and standby schedule continue. It also extends any configured cooldown to `max(existing_deadline, dismissal_time + cooldown)`.
 
 ### Development expression previews
 
@@ -212,12 +228,13 @@ With `POMO_DEV_CONTROLS=false`, simulated input selection/observations and both 
 | Input or action | Result |
 | --- | --- |
 | Monitoring enabled without valid input | `bored`; no reminder |
-| Fresh `present` | `happy`; clear pending duration and active reminder; retain cooldown |
-| Fresh `absent` | `sad`; start/continue a sustained absence window |
-| Absence threshold reached with fresh input and no cooldown | `surprised`; increment reminder ID, show message and start cooldown |
-| Reminder remains active | Keep the same reminder; do not repeatedly trigger cues when its original cooldown ends |
-| Dismissal | Clear the active reminder and begin a full quiet period; continuing absence may retrigger only after cooldown |
-| Fresh `uncertain` | Clear pending duration/reminder and show `happy`; after 1 second of continuous fresh uncertainty report `absent` and start the absence timer |
+| Fresh `present` | `happy`; end the departure, clear the reminder sequence and log `user_returned` with latency; retain cooldown |
+| Fresh `absent` | `surprised`; start/continue the departure window and log `departure_detected` |
+| `absence_seconds` after leaving, fresh input, cooldown ended | First reminder (`stage` 1): `sad`, new reminder ID, message and spoken cue |
+| `repeat_seconds` after the first reminder, still away | Second reminder (`stage` 2): `sad`, new reminder ID, spoken again |
+| `standby_seconds` after the first reminder, still away | `standby` true: `bored`, reminder cleared, no further reminders; monitoring stays on and a return shows `happy` |
+| Dismissal | Silence the current cue; the face stays `sad` and the schedule continues |
+| Fresh `uncertain` | Show `happy`; after 1 second of continuous fresh uncertainty report `absent`. The departure time is backdated to the start of that uncertainty |
 | Fresh `unavailable` | Camera unavailable; clear pending duration/reminder and enter `bored` |
 | Observation timeout or producer disconnect | Clear input and active reminder, rotate the session token and enter `bored` while monitoring |
 | Monitoring pause | Clear input and active reminder, rotate session and show `bored`; retain cooldown |
@@ -229,7 +246,7 @@ An expired observation window cannot be extended by late input. If the window ex
 
 Session tokens rotate on actual power/monitoring changes, observation timeout and producer disconnect. Frames buffered from an old session must be discarded. A replacement/reconnecting producer must read current state and generate fresh timestamps, rather than replaying queued frames.
 
-Cooldown is shared and remains in effect after presence returns, input becomes unavailable or monitoring pauses. A zero cooldown is supported and deliberately permits immediate retriggering after dismissal when fresh sustained absence still applies.
+Cooldown is shared and defaults to zero. When set, it only delays the first reminder of a later departure; it remains in effect after presence returns, input becomes unavailable or monitoring pauses. `next_step_seconds` reports the time until the next scheduled reminder or standby, or null when none is pending.
 
 ## Camera Frame Adapter
 
@@ -293,8 +310,8 @@ stale gaps are `unavailable`. Initially both clear pending and active reminders.
 
 Any fresh present observation clears an active cue immediately; stable presence
 establishes the diagnostic baseline. Stable presence defaults to 0.5 seconds; tracking-loss grace defaults to 1 second and affects diagnostics.
-The normalized engine's absence threshold is 5 seconds after qualifying absence
-begins. `camera_absence_duration_seconds` exposes the raw interval before that
+The engine's first reminder follows 10 seconds after the face was first lost
+(the start of the qualifying uncertainty). `camera_absence_duration_seconds` exposes the raw interval before that
 gate, so an empty scene can be diagnosed without arming a reminder. Head direction,
 eye closure and mouth movements never independently trigger reminders.
 `backend/behaviour.py` is the retained standalone previous policy; live decisions
@@ -362,9 +379,33 @@ Normalized scores are approximate closure signals rather than physical percentag
 or model confidence. Iris
 observations do not affect the absence policy or represent screen gaze/attention.
 
+## Robot Display Serial
+
+When `POMO_SERIAL_PORT` names a device (for example `/dev/cu.usbmodem1101` on macOS or `COM5` on Windows), `backend/hardware.py` mirrors the rendered state to the CoreS3 over USB serial at `POMO_SERIAL_BAUDRATE` (default 115200). An empty port disables it. Backend to device: one ASCII JSON object per line:
+
+```json
+{"v":1,"display":"sad","reminder":3,"stage":1,"sound":true,"standby":false,"camera":false}
+```
+
+- `v`: serial message version, currently 1. The device ignores other versions.
+- `display`: one of the five display identifiers, including manual previews.
+- `reminder`: active reminder ID, or 0 when no reminder is active. A new non-zero ID is a new cue.
+- `stage`: 0, 1 or 2, as in `reminder.stage`.
+- `sound`: false when the shared preference is muted.
+- `standby`: as in the snapshot.
+- `camera`: true while power is on, monitoring is enabled and `input_source` is `robot`; the device streams frames only while it is true.
+
+Device to backend: binary camera frames, each `PJPG` + uint32 length + uint32 sequence (both little-endian) + a JPEG. The firmware sends 320x240 JPEGs at up to 5 frames per second. The backend resynchronises on `PJPG`, discards frames over `POMO_CAMERA_MAX_BYTES`, and drops frames that arrive while the previous one is still being processed. After each boot the device also sends one text line, `pomo-robot boot reset_reason=<n> camera=<0|1>`, which the backend logs. Frames are never stored or shown on the robot.
+
+A message is queued whenever a published snapshot changes these fields; only the newest pending message is kept. A dedicated thread writes it, so the event loop never blocks on the port, and repeats the last message every 2 seconds as a heartbeat. A missing or unplugged device is logged once as unavailable and reopened every 2 seconds; it never stops the server. The firmware in `firmware/robot-adapter` shows the bored face with "No link" when no line arrives for 6 seconds. The device sends no commands; dismissal and controls remain in the simulator.
+
+The firmware speaks each new non-zero `reminder` once through the CoreS3 speaker, using recorded clips of the stage 1 and stage 2 messages. The first message after the link starts is silent, so an old reminder is never replayed. Speech stops when `reminder` becomes 0 (return, dismissal or standby), when `sound` becomes false, or when the link times out. While `robot_display` is `connected`, the simulator does not speak or play its tone.
+
 ## Debug Events and Errors
 
 Events include an increasing integer `id`, UTC ISO-8601 `at`, `level` (`info`, `warning` or `error`), `kind` and bounded `message`. They record transitions, reminder activity, source changes, lifecycle changes, connections and command rejections. Unchanged observation heartbeats do not add log entries.
+
+For user-study timing, the server log also records `departure_detected` (with the backdated departure time), `reminder_triggered` (with first/second stage and time away), `standby_entered`, `user_returned` (seconds since the latest reminder and total time away) and `absence_interrupted` (input lost, paused or powered off during a departure).
 
 The backend keeps only the latest 100 events in memory and writes event summaries through Python logging. The simulator displays the bounded backend log separately from its local connection journal. Clearing the browser log hides existing entries in that tab; it does not delete shared backend history.
 
@@ -382,7 +423,7 @@ No frame/image/video fields are accepted in JSON commands. JPEG bodies belong on
 
 The simulator retries after 1, 2, 4 and 8 seconds, then at most every 10 seconds. Controls remain disabled until a valid snapshot arrives. While disconnected, the previous display is marked stale, simulated-input heartbeats and any local tone stop, and commands are not queued.
 
-On reconnect, restore the current snapshot and require a new simulated-input selection. The first snapshot never plays an old reminder sound. Subsequent newly observed active reminders may play one short cue per audio-enabled tab, identified by `instance_id:reminder.id`. Manual previews, mute/unmute and later snapshots of the same reminder do not replay sound.
+On reconnect, restore the current snapshot and require a new simulated-input selection. The first snapshot never plays an old reminder sound. Unless the robot display is connected, subsequent newly observed active reminders speak the reminder message once per audio-enabled tab using browser speech synthesis, falling back to a short tone when speech is unavailable, identified by `instance_id:reminder.id`. Clearing the reminder, muting, pausing, powering off or disconnecting cancels speech. Manual previews, mute/unmute and later snapshots of the same reminder do not replay sound.
 
 A backend restart creates a new instance ID, resets reminder/event counters and revision, powers the simulated robot on with monitoring paused, and clears observations/cooldowns. Sound preference resets to the configured startup default.
 
@@ -391,10 +432,14 @@ A backend restart creates a new instance ID, resets reminder/event counters and 
 | Environment setting | Default | Constraint |
 | --- | --- | --- |
 | `POMO_UNCERTAINTY_SECONDS` | `1` | Continuous fresh uncertainty before it becomes absent |
-| `POMO_ABSENCE_SECONDS` | `5` | At startup: finite, greater than zero, at most 3600, and at least camera tracking-loss grace |
-| `POMO_REMINDER_COOLDOWN_SECONDS` | `30` | Finite, non-negative |
+| `POMO_ABSENCE_SECONDS` | `10` | Leaving to first reminder. At startup: finite, greater than zero, at most 3600, and at least camera tracking-loss grace |
+| `POMO_REMINDER_REPEAT_SECONDS` | `300` | First to second reminder; finite, greater than zero |
+| `POMO_STANDBY_SECONDS` | `600` | First reminder to standby; greater than the repeat interval |
+| `POMO_REMINDER_COOLDOWN_SECONDS` | `0` | Finite, non-negative; spaces first reminders between departures |
 | `POMO_OBSERVATION_TIMEOUT_SECONDS` | `3` | Finite, greater than zero |
-| `POMO_SOUND_ENABLED` | `false` | Startup preference; browser audio still requires a user gesture |
+| `POMO_SOUND_ENABLED` | `true` | Startup preference; browser audio still requires a user gesture |
+| `POMO_SERIAL_PORT` | empty | CoreS3 serial device; empty disables the robot display adapter |
+| `POMO_SERIAL_BAUDRATE` | `115200` | Positive integer; must match the firmware |
 | `POMO_DEV_CONTROLS` | `true` | Gates simulated input and manual expression previews |
 
 Tests can construct `create_app(config=PolicyConfig(...), clock=fake_monotonic, wall_clock=fake_epoch, run_ticker=False)` and explicitly await `app.state.runtime.tick()`. Pure policy tests inject both clocks into `ReminderEngine`. No test-only command for advancing time is exposed over the WebSocket.

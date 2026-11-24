@@ -72,7 +72,7 @@ def test_default_camera_source_and_private_session_are_not_broadcast_to_viewers(
             initial = owner.receive_json()
             assert initial['input_source'] == 'camera'
             assert initial['camera_session'] is None
-            assert initial['protocol_version'] == 9
+            assert initial['protocol_version'] == 10
             owner.send_json({'type': 'set_monitoring', 'enabled': True})
             active = owner.receive_json()
             assert active['camera_session']

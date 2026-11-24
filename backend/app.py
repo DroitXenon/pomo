@@ -20,7 +20,7 @@ from backend.observations import Observation, Presence
 from backend.policy import PolicyConfig, ReminderEngine
 
 LOG = logging.getLogger("pomo")
-PROTOCOL_VERSION = 9
+PROTOCOL_VERSION = 10
 Display = Literal["happy", "idle", "sad", "surprised", "bored"]
 
 
@@ -45,7 +45,7 @@ class SetMuted(StrictCommand):
 
 class SetInputSource(StrictCommand):
     type: Literal["set_input_source"]
-    source: Literal["camera", "simulated"]
+    source: Literal["camera", "simulated", "robot"]
 
 
 class CameraFailed(StrictCommand):
@@ -82,6 +82,18 @@ Command = Annotated[
 COMMANDS = TypeAdapter(Command)
 
 
+class _RobotFrameRequest:
+    """Present a robot-camera JPEG through the same checks as a browser upload."""
+
+    def __init__(self, token, sequence, data):
+        self.headers = {"x-camera-session": token, "x-frame-sequence": str(sequence),
+                        "content-type": "image/jpeg"}
+        self._data = data
+
+    async def stream(self):
+        yield self._data
+
+
 class Runtime:
     """Serialize commands, camera results, timer ticks and complete snapshots.
 
@@ -90,8 +102,10 @@ class Runtime:
     """
 
     def __init__(self, engine, dev_controls, *, camera_config, perception_config,
-                 behaviour_config, processor_factory, clock, wall_clock):
+                 behaviour_config, processor_factory, clock, wall_clock,
+                 display_adapter=None):
         self.engine = engine
+        self.display_adapter = display_adapter
         self.dev_controls = dev_controls
         self.instance_id = str(uuid4())
         self.revision = 0
@@ -161,6 +175,7 @@ class Runtime:
             "instance_id": self.instance_id, "revision": self.revision,
             "dev_controls": self.dev_controls, **engine_snapshot,
             "input_source": self.input_source,
+            "robot_display": self.robot_display_status(),
             "camera_processor_ready": self.worker_ready,
             "camera_capture_status": self.camera_capture_status,
             "camera_settings": self.camera_config.browser_settings(),
@@ -187,6 +202,21 @@ class Runtime:
                 LOG.log(level, "%s: %s", event["kind"], event["message"])
                 self._last_logged = event["id"]
 
+    def robot_display_status(self):
+        """disabled without a serial port; connected while the port is open."""
+        if self.display_adapter is None:
+            return "disabled"
+        return "connected" if getattr(self.display_adapter, "status", None) == "connected" else "unavailable"
+
+    def _publish_display(self, snapshot):
+        """Hand the snapshot to the optional robot display without blocking."""
+        if self.display_adapter is None:
+            return
+        try:
+            self.display_adapter.publish(snapshot)
+        except Exception:
+            LOG.exception("Robot display adapter rejected a snapshot")
+
     async def _send(self, ws, payload):
         await asyncio.wait_for(ws.send_json(payload), timeout=2)
 
@@ -195,6 +225,7 @@ class Runtime:
         while True:
             self._last_snapshot = self.snapshot()
             self._log_events()
+            self._publish_display(self._last_snapshot)
             peers = tuple(self.clients)
             results = await asyncio.gather(
                 *(self._send(peer, self.snapshot(peer)) for peer in peers),
@@ -216,12 +247,13 @@ class Runtime:
 
     def _tick_locked(self):
         before_session = self.engine.observation_session
-        if self.camera_owner is not None:
+        if self.camera_session is not None:
             limit = (self.camera_config.startup_seconds
                      if self.camera_capture_status == "starting"
                      else self.camera_config.timeout_seconds)
-            if (self.camera_owner not in self.clients or self.last_input is None
-                    or self.clock() - self.last_input >= limit):
+            if (self.input_source == "camera" and self.camera_owner not in self.clients
+                    or self.input_source == "robot" and self.robot_display_status() != "connected"
+                    or self.last_input is None or self.clock() - self.last_input >= limit):
                 self._camera_failed("Camera input timed out or disconnected.")
             elif (self._last_camera_observed is not None
                   and self.clock() - self._last_camera_observed
@@ -274,26 +306,31 @@ class Runtime:
             self._release_camera()
             self.producer = None
             return
-        if self.input_source != "camera":
+        if self.input_source == "simulated":
             self.engine.set_monitoring(True)
             return
         if not self.engine.powered_on:
             raise ValueError("Power on Pomo before enabling monitoring")
         if not self.worker_ready:
             raise ValueError("Camera processor unavailable; check model setup or select simulated input")
-        if self.camera_owner is not None:
-            if self.camera_owner is not ws:
+        robot = self.input_source == "robot"
+        if robot and self.robot_display_status() != "connected":
+            raise ValueError("Robot not connected; check the USB cable and POMO_SERIAL_PORT")
+        if self.camera_session is not None:
+            if not robot and self.camera_owner is not ws:
                 raise ValueError("Camera is already owned by another monitoring tab")
             return
         changed = self.engine.set_monitoring(True)
         if not changed:
             self.engine.invalidate_observations("Camera input restarted", level="info")
         self._release_camera("starting")
-        self.camera_owner = ws
+        # The robot camera has no WebSocket owner; its token never leaves the backend.
+        self.camera_owner = None if robot else ws
         self.camera_session = secrets.token_urlsafe(32)
         self.last_input = self.clock()
         self.camera_tracking_status = "awaiting_face"
-        self.engine.record("camera_started", "Camera capture requested from the monitoring tab.")
+        self.engine.record("camera_started", "Robot camera capture requested." if robot
+                           else "Camera capture requested from the monitoring tab.")
 
     async def dispatch(self, command, ws):
         async with self.lock:
@@ -312,6 +349,8 @@ class Runtime:
                         raise ValueError("Input changes require power on and monitoring paused")
                     if command.source == "simulated" and not self.dev_controls:
                         raise ValueError("Simulated observations are disabled")
+                    if command.source == "robot" and self.display_adapter is None:
+                        raise ValueError("Robot camera needs POMO_SERIAL_PORT")
                     if command.source != self.input_source:
                         self.input_source = command.source
                         self._release_camera()
@@ -466,7 +505,7 @@ class Runtime:
                 if not encoded:
                     raise HTTPException(400, "Empty frame")
                 async with self.lock:
-                    if token != self.camera_session:
+                    if not self.camera_session or not secrets.compare_digest(token, self.camera_session):
                         raise HTTPException(409, "Camera session expired")
                     self.last_sequence = sequence
                 job = asyncio.get_running_loop().run_in_executor(
@@ -488,11 +527,7 @@ class Runtime:
                             self.head.direction)
                 try:
                     presence = self._normalized_presence(observation, now)
-                    self.engine.observe(
-                        presence, "camera", received_wall, observation_session,
-                        transient_loss=(self.camera_armed and
-                                        self.camera_tracking_status == "tracking_loss"),
-                    )
+                    self.engine.observe(presence, "camera", received_wall, observation_session)
                 except ValueError as error:
                     # Validation rejects duplicates/expired input before policy mutation.
                     # Keep the perception adapter equally atomic on that rejected frame.
@@ -542,6 +577,17 @@ class Runtime:
             else:
                 self.busy = False
 
+    async def robot_frame(self, data):
+        """Process one robot-camera JPEG; frames arriving while busy are dropped."""
+        if self.input_source != "robot" or not self.camera_session or self.busy:
+            return False
+        try:
+            await self.camera_frame(_RobotFrameRequest(self.camera_session, self.last_sequence + 1, data))
+        except HTTPException as error:
+            LOG.debug("Robot frame dropped: %s", error.detail)
+            return False
+        return True
+
     async def close(self):
         async with self.lock:
             self._release_camera()
@@ -570,6 +616,7 @@ def create_app(
     camera_config: CameraConfig | None = None,
     perception_config: PerceptionConfig | None = None,
     behaviour_config: BehaviourConfig | None = None, processor_factory=None,
+    display_adapter=None,
 ) -> FastAPI:
     if not math.isfinite(tick_interval) or tick_interval <= 0:
         raise ValueError("tick_interval must be finite and positive")
@@ -580,10 +627,25 @@ def create_app(
     runtime = Runtime(engine, dev_controls, camera_config=camera_config or CameraConfig(),
                       perception_config=perception_config or PerceptionConfig(),
                       behaviour_config=behaviour_config or BehaviourConfig(),
-                      processor_factory=processor_factory, clock=clock, wall_clock=wall_clock)
+                      processor_factory=processor_factory, clock=clock, wall_clock=wall_clock,
+                      display_adapter=display_adapter)
 
     @asynccontextmanager
     async def lifespan(app):
+        if display_adapter is not None:
+            loop = asyncio.get_running_loop()
+            in_flight = None
+
+            def on_frame(data):
+                # Serial thread: keep at most one robot frame queued on the loop.
+                nonlocal in_flight
+                if in_flight is None or in_flight.done():
+                    in_flight = asyncio.run_coroutine_threadsafe(runtime.robot_frame(data), loop)
+
+            display_adapter.on_frame = on_frame
+            display_adapter.start()
+            async with runtime.lock:
+                runtime._publish_display(runtime.snapshot())
         await runtime.open_camera()
         ticker = asyncio.create_task(runtime.run(tick_interval)) if run_ticker else None
         try:
@@ -593,7 +655,11 @@ def create_app(
                 ticker.cancel()
                 with suppress(asyncio.CancelledError):
                     await ticker
-            await runtime.close()
+            try:
+                if display_adapter is not None:
+                    await asyncio.to_thread(display_adapter.close)
+            finally:
+                await runtime.close()
 
     app = FastAPI(title="Pomo simulator", lifespan=lifespan)
     app.state.runtime = runtime

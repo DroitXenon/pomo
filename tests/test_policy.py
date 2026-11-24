@@ -5,7 +5,7 @@ import math
 
 import pytest
 
-from backend.policy import DISPLAYS, PolicyConfig, ReminderEngine
+from backend.policy import DISPLAYS, REMINDER_MESSAGES, PolicyConfig, ReminderEngine
 
 
 class FakeClock:
@@ -72,91 +72,6 @@ def test_initial_state_and_enable_require_fresh_observations(policy):
     assert engine.snapshot()["behavior_state"] == "happy"
 
 
-def test_reminder_triggers_at_sustained_threshold_with_fresh_heartbeats(policy):
-    engine, clock = policy
-    start_absence(engine, clock)
-    continue_absence(engine, clock, 4)
-    clock.advance(0.999)
-    engine.tick()
-    assert engine.snapshot()["behavior_state"] == "sad"
-    assert engine.snapshot()["reminder"]["active"] is False
-    clock.advance(0.001)
-    assert engine.tick() is True
-    state = engine.snapshot()
-    assert state["behavior_state"] == "surprised"
-    assert state["reminder"] == {
-        "active": True, "id": 1, "message": "Ready to return to your study session?"}
-    assert state["absence_duration_seconds"] == 5
-    assert state["cooldown_remaining_seconds"] == 30
-
-
-def test_brief_absence_does_not_accumulate_across_present_observations(policy):
-    engine, clock = policy
-    start_absence(engine, clock)
-    continue_absence(engine, clock, 4)
-    clock.advance(0.1)
-    observe(engine, clock, "present")
-    assert engine.snapshot()["absence_duration_seconds"] == 0
-    clock.advance(0.1)
-    observe(engine, clock)
-    continue_absence(engine, clock, 4)
-    assert engine.snapshot()["behavior_state"] == "sad"
-    assert engine.snapshot()["reminder"]["id"] == 0
-
-
-def test_active_reminder_does_not_repeat_after_cooldown(policy):
-    engine, clock = policy
-    trigger_reminder(engine, clock)
-    continue_absence(engine, clock, 40)
-    assert engine.snapshot()["reminder"]["id"] == 1
-    assert sum(e["kind"] == "reminder_triggered" for e in engine.snapshot()["events"]) == 1
-
-
-def test_dismissal_preserves_cooldown_and_continued_absence_can_retrigger(policy):
-    engine, clock = policy
-    trigger_reminder(engine, clock)
-    engine.dismiss(1)
-    dismissed = engine.snapshot()
-    assert dismissed["behavior_state"] == "sad"
-    assert dismissed["reminder"]["active"] is False
-    assert dismissed["cooldown_remaining_seconds"] == 30
-    continue_absence(engine, clock, 29.9)
-    assert engine.snapshot()["reminder"]["id"] == 1
-    clock.advance(0.1)
-    engine.tick()
-    assert engine.snapshot()["reminder"]["id"] == 2
-    assert engine.snapshot()["reminder"]["active"] is True
-
-
-def test_returning_user_clears_reminder_and_pending_duration(policy):
-    engine, clock = policy
-    trigger_reminder(engine, clock)
-    clock.advance(0.1)
-    observe(engine, clock, "present")
-    state = engine.snapshot()
-    assert state["display"] == "happy"
-    assert state["reminder"]["active"] is False
-    assert state["absence_duration_seconds"] == 0
-    assert state["cooldown_remaining_seconds"] == pytest.approx(29.9)
-    clock.advance(0.1)
-    observe(engine, clock)
-    continue_absence(engine, clock, 5)
-    assert engine.snapshot()["reminder"]["active"] is False
-
-
-def test_dismissal_after_old_cooldown_expired_starts_full_quiet_period(policy):
-    engine, clock = policy
-    trigger_reminder(engine, clock)
-    continue_absence(engine, clock, 40)
-    assert engine.snapshot()["cooldown_remaining_seconds"] == 0
-    engine.dismiss(1)
-    assert engine.snapshot()["cooldown_remaining_seconds"] == 30
-    continue_absence(engine, clock, 29)
-    assert engine.snapshot()["reminder"]["active"] is False
-    continue_absence(engine, clock, 1)
-    assert engine.snapshot()["reminder"]["id"] == 2
-
-
 @pytest.mark.parametrize("presence,camera_status", [
     ("uncertain", "available"), ("unavailable", "unavailable")])
 def test_uncertain_or_unavailable_input_clears_reminder(policy, presence, camera_status):
@@ -175,11 +90,10 @@ def test_uncertain_or_unavailable_input_clears_reminder(policy, presence, camera
     assert engine.snapshot()["reminder"]["id"] == 1
 
 
-def test_transient_loss_keeps_unknown_observation_but_shows_happy_until_expiry(policy):
+def test_brief_uncertainty_shows_happy_until_expiry(policy):
     engine, clock = policy
     engine.set_monitoring(True)
-    engine.observe("uncertain", "camera", clock.wall(), engine.observation_session,
-                   transient_loss=True)
+    engine.observe("uncertain", "camera", clock.wall(), engine.observation_session)
     state = engine.snapshot()
     assert state["observation"]["presence"] == "uncertain"
     assert state["behavior_state"] == state["display"] == "happy"
@@ -195,27 +109,6 @@ def test_transient_loss_keeps_unknown_observation_but_shows_happy_until_expiry(p
     assert engine.snapshot()["display"] == "happy"
 
 
-def test_sustained_uncertainty_becomes_absent_and_can_recover(policy):
-    engine, clock = policy
-    engine.set_monitoring(True)
-    observe(engine, clock, "uncertain")
-    clock.advance(0.999)
-    observe(engine, clock, "uncertain")
-    assert engine.snapshot()["display"] == "happy"
-    clock.advance(0.001)
-    engine.tick()
-    assert engine.snapshot()["observation"]["presence"] == "absent"
-    assert engine.snapshot()["display"] == "sad"
-    for _ in range(5):
-        clock.advance(1)
-        observe(engine, clock, "uncertain")
-    assert engine.snapshot()["display"] == "surprised"
-    clock.advance(0.1)
-    observe(engine, clock, "present")
-    assert engine.snapshot()["display"] == "happy"
-    assert engine.snapshot()["observation"]["presence"] == "present"
-
-
 def test_pause_resets_observations_and_rejects_old_session_on_resume(policy):
     engine, clock = policy
     trigger_reminder(engine, clock)
@@ -225,7 +118,8 @@ def test_pause_resets_observations_and_rejects_old_session_on_resume(policy):
     assert paused["display"] == "bored"
     assert paused["reminder"]["active"] is False
     assert paused["absence_duration_seconds"] == 0
-    assert paused["cooldown_remaining_seconds"] == 30
+    assert paused["cooldown_remaining_seconds"] == 0
+    assert paused["reminder"]["stage"] == 0
     with pytest.raises(ValueError, match="monitoring enabled"):
         observe(engine, clock)
     engine.set_monitoring(True)
@@ -264,7 +158,7 @@ def test_expiry_accounts_for_age_already_present_at_receipt(policy):
     engine.observe("absent", "camera", clock.wall() - 2.5, old_session)
     clock.advance(0.49)
     assert engine.tick() is False
-    assert engine.snapshot()["display"] == "sad"
+    assert engine.snapshot()["display"] == "surprised"
     clock.advance(0.01)
     assert engine.tick() is True
     expired = engine.snapshot()
@@ -290,7 +184,7 @@ def test_disconnect_invalidates_buffered_observations_and_active_reminder(policy
         engine.observe("absent", "camera", clock.wall(), original_session)
 
 
-def test_expiry_clears_an_active_reminder_and_preserves_cooldown(policy):
+def test_expiry_clears_an_active_reminder_and_the_departure(policy):
     engine, clock = policy
     trigger_reminder(engine, clock)
     clock.advance(3)
@@ -298,8 +192,9 @@ def test_expiry_clears_an_active_reminder_and_preserves_cooldown(policy):
     expired = engine.snapshot()
     assert expired["behavior_state"] == "bored"
     assert expired["reminder"]["active"] is False
-    assert expired["cooldown_remaining_seconds"] == 27
+    assert expired["reminder"]["stage"] == 0
     assert expired["absence_duration_seconds"] == 0
+    assert any(event["kind"] == "absence_interrupted" for event in expired["events"])
 
 
 @pytest.mark.parametrize("initial_presence", ["absent", "uncertain"])
@@ -328,7 +223,7 @@ def test_expired_generation_rejects_before_timer_and_requires_new_session(policy
 
     observe(engine, clock)
     assert engine.snapshot()["absence_duration_seconds"] == 0
-    continue_absence(engine, clock, 4)
+    continue_absence(engine, clock, 9)
     assert engine.snapshot()["reminder"]["id"] == 0
     continue_absence(engine, clock, 1)
     assert engine.snapshot()["reminder"]["id"] == 1
@@ -431,19 +326,156 @@ def test_unchanged_observation_heartbeats_do_not_spam_debug_log(policy):
     ("absence_seconds", 0), ("absence_seconds", -1),
     ("absence_seconds", math.nan), ("absence_seconds", True),
     ("cooldown_seconds", -1), ("cooldown_seconds", math.inf),
-    ("observation_timeout_seconds", 0), ("observation_timeout_seconds", "3")])
+    ("observation_timeout_seconds", 0), ("observation_timeout_seconds", "3"),
+    ("repeat_seconds", 0), ("standby_seconds", 300), ("standby_seconds", 200)])
 def test_invalid_policy_configuration_is_rejected(field, value):
     with pytest.raises(ValueError):
         replace(PolicyConfig(), **{field: value})
 
+def kinds(engine, kind):
+    return [event for event in engine.snapshot()["events"] if event["kind"] == kind]
 
-def test_zero_cooldown_is_supported_and_still_needs_explicit_dismissal():
+
+def test_surprised_while_away_then_first_reminder_after_ten_seconds(policy):
+    engine, clock = policy
+    start_absence(engine, clock)
+    assert engine.snapshot()["display"] == "surprised"
+    assert len(kinds(engine, "departure_detected")) == 1
+    continue_absence(engine, clock, 9)
+    clock.advance(0.999)
+    engine.tick()
+    state = engine.snapshot()
+    assert state["display"] == "surprised"
+    assert state["reminder"]["active"] is False
+    assert state["next_step_seconds"] == pytest.approx(0.001)
+    clock.advance(0.001)
+    assert engine.tick() is True
+    state = engine.snapshot()
+    assert state["display"] == state["behavior_state"] == "sad"
+    assert state["reminder"] == {"active": True, "id": 1, "stage": 1,
+                                 "message": REMINDER_MESSAGES[1]}
+    assert state["absence_duration_seconds"] == 10
+    assert state["cooldown_remaining_seconds"] == 0
+    assert state["next_step_seconds"] == 300
+    assert "(first)" in kinds(engine, "reminder_triggered")[-1]["message"]
+
+
+def test_brief_absence_does_not_accumulate_across_present_observations(policy):
+    engine, clock = policy
+    start_absence(engine, clock)
+    continue_absence(engine, clock, 8)
+    clock.advance(0.1)
+    observe(engine, clock, "present")
+    assert engine.snapshot()["absence_duration_seconds"] == 0
+    assert "before any reminder" in kinds(engine, "user_returned")[-1]["message"]
+    clock.advance(0.1)
+    observe(engine, clock)
+    continue_absence(engine, clock, 8)
+    assert engine.snapshot()["display"] == "surprised"
+    assert engine.snapshot()["reminder"]["id"] == 0
+
+
+def test_second_reminder_then_standby_then_return_shows_happy(policy):
+    engine, clock = policy
+    trigger_reminder(engine, clock)
+    continue_absence(engine, clock, 299)
+    assert engine.snapshot()["reminder"]["id"] == 1
+    continue_absence(engine, clock, 1)
+    state = engine.snapshot()
+    assert state["reminder"] == {"active": True, "id": 2, "stage": 2,
+                                 "message": REMINDER_MESSAGES[2]}
+    assert state["display"] == "sad"
+    assert "(second)" in kinds(engine, "reminder_triggered")[-1]["message"]
+    continue_absence(engine, clock, 299)
+    assert engine.snapshot()["standby"] is False
+    continue_absence(engine, clock, 1)
+    state = engine.snapshot()
+    assert state["standby"] is True
+    assert state["display"] == "bored"
+    assert state["monitoring_enabled"] is True
+    assert state["reminder"]["active"] is False
+    assert state["next_step_seconds"] is None
+    assert len(kinds(engine, "standby_entered")) == 1
+    continue_absence(engine, clock, 100)
+    assert engine.snapshot()["reminder"]["id"] == 2
+    assert len(kinds(engine, "reminder_triggered")) == 2
+    clock.advance(0.5)
+    observe(engine, clock, "present")
+    state = engine.snapshot()
+    assert state["display"] == "happy"
+    assert state["standby"] is False
+    assert "after standby" in kinds(engine, "user_returned")[-1]["message"]
+
+
+def test_dismissal_silences_the_cue_but_keeps_the_schedule(policy):
+    engine, clock = policy
+    trigger_reminder(engine, clock)
+    engine.dismiss(1)
+    dismissed = engine.snapshot()
+    assert dismissed["display"] == "sad"
+    assert dismissed["reminder"]["active"] is False
+    assert dismissed["reminder"]["stage"] == 1
+    continue_absence(engine, clock, 300)
+    assert engine.snapshot()["reminder"]["id"] == 2
+    assert engine.snapshot()["reminder"]["active"] is True
+
+
+def test_return_logs_latency_after_the_latest_reminder_and_resets_the_sequence(policy):
+    engine, clock = policy
+    trigger_reminder(engine, clock)
+    continue_absence(engine, clock, 23.3, step=0.6)
+    clock.advance(0.1)
+    observe(engine, clock, "present")
+    state = engine.snapshot()
+    assert state["display"] == "happy"
+    assert state["reminder"]["active"] is False
+    assert state["reminder"]["stage"] == 0
+    assert state["absence_duration_seconds"] == 0
+    message = kinds(engine, "user_returned")[-1]["message"]
+    assert "23.4s after reminder 1 (first)" in message
+    assert "away 33.4s" in message
+    clock.advance(0.1)
+    observe(engine, clock)
+    assert engine.snapshot()["display"] == "surprised"
+    continue_absence(engine, clock, 10)
+    assert engine.snapshot()["reminder"]["id"] == 2
+    assert engine.snapshot()["reminder"]["stage"] == 1
+
+
+def test_departure_time_includes_the_initial_uncertainty(policy):
+    engine, clock = policy
+    engine.set_monitoring(True)
+    observe(engine, clock, "uncertain")
+    clock.advance(0.999)
+    observe(engine, clock, "uncertain")
+    assert engine.snapshot()["display"] == "happy"
+    clock.advance(0.001)
+    engine.tick()
+    state = engine.snapshot()
+    assert state["observation"]["presence"] == "absent"
+    assert state["display"] == "surprised"
+    assert state["absence_duration_seconds"] == 1
+    for _ in range(9):
+        clock.advance(1)
+        observe(engine, clock, "uncertain")
+    assert engine.snapshot()["reminder"]["id"] == 1
+    assert engine.snapshot()["display"] == "sad"
+    clock.advance(0.1)
+    observe(engine, clock, "present")
+    assert engine.snapshot()["display"] == "happy"
+
+
+def test_cooldown_spaces_first_reminders_between_departures():
     clock = FakeClock()
-    engine = ReminderEngine(PolicyConfig(cooldown_seconds=0), clock=clock.monotonic,
+    engine = ReminderEngine(PolicyConfig(cooldown_seconds=30), clock=clock.monotonic,
                             wall_clock=clock.wall)
     trigger_reminder(engine, clock)
-    engine.tick()
+    clock.advance(0.1)
+    observe(engine, clock, "present")
+    clock.advance(0.1)
+    observe(engine, clock)
+    continue_absence(engine, clock, 29.7)
+    assert engine.snapshot()["display"] == "surprised"
     assert engine.snapshot()["reminder"]["id"] == 1
-    engine.dismiss(1)
-    engine.tick()
+    continue_absence(engine, clock, 0.2)
     assert engine.snapshot()["reminder"]["id"] == 2

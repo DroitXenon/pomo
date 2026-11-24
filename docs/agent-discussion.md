@@ -179,6 +179,53 @@ browser and OS camera settings and retry. Obtain the exact on-page failure befor
 claiming the physical-camera issue is fixed. Preserve the other contributor's
 concurrent `a705dba` commit; remaining test/diagnostic edits are separate local work.
 
+### 2026-11-11-pomo-cores3-display-test
+
+- Date: 2026-11-11 16:19 UTC+00:00
+- Author: Pomo task owner's agent / Codex
+- Type: Handoff
+- Related entries: 2026-11-04-pomo-camera-reminders-integration
+- Context: `feature/stack`; `firmware/pomostack/platformio.ini` and `src/main.cpp`.
+
+**Idea or response:**
+The existing PlatformIO project now initializes M5Unified and draws a static
+black-and-white face. It preserves the CoreS3 board selection and adds the
+M5Unified dependency. It does not control Pomo's backend or camera.
+
+**Reasoning and evidence:**
+The CoreS3 PlatformIO build succeeded with M5Unified and M5GFX 0.3.0. The
+firmware was not uploaded and the physical screen has not been verified.
+
+**Next step:**
+Upload the display test, confirm its appearance on the device, then separately
+plan camera capture and the USB/backend adapter. Follow the existing protocol's
+camera ownership rules; do not send camera frames in WebSocket commands.
+
+### 2026-11-11-pomo-cores3-camera-test
+
+- Date: 2026-11-11 16:39 UTC+00:00
+- Author: Pomo task owner's agent / Codex
+- Type: Handoff
+- Related entries: 2026-11-11-pomo-cores3-display-test
+- Context: `feature/stack`; standalone `firmware/camera-test` project.
+
+**Idea or response:**
+The task owner confirmed the face appeared on the device and requested a camera
+test. The new sketch previews CoreS3 camera frames on the device screen without
+saving them or connecting to the backend. The existing face project remains
+separate; uploading either project replaces the program on the device.
+
+**Reasoning and evidence:**
+The PlatformIO camera build passed. The sketch releases the internal I2C driver
+before camera initialization and avoids polling shared-bus peripherals during
+preview. Physical camera capture, colors, orientation and stability have not
+yet been tested. See [verification records](verification.md).
+
+**Next step:**
+Upload the camera test and check the preview and serial diagnostics on the
+CoreS3. Upload `firmware/pomostack` again to restore the face. Plan backend
+integration separately after the camera test works.
+
 ### 2026-11-11-pomo-expression-identifiers
 
 - Date: 2026-11-11 16:21 UTC+00:00
@@ -247,3 +294,44 @@ A V8 mocked frontend check covered ten camera conditions and disconnect; see
 **Next step:**
 Check the layout and status changes in a browser with a real camera; run the
 repository's Node tests where Node.js is available.
+
+### 2026-11-24-justin-proposal-reminder-sequence
+
+- Date: 2026-11-24 UTC+00:00
+- Author: Justin (task owner) / Claude Code
+- Type: Decision
+- Related entries: 2026-11-11-pomo-expression-identifiers
+- Context: `feature/proposal-reminders`, from `feature/stack`; `backend/policy.py`, `backend/config.py`, `backend/app.py`, `simulator/`, protocol v10.
+
+**Idea or response:**
+The task owner decided that the reminder sequence and voice follow the team proposal (Notion "Report Proposol"), and that the study follows Susana's plan. Pomo now:
+- shows `surprised` once the user has left;
+- after 10 s, shows `sad` (crying) and speaks the first reminder;
+- after a further 5 min, speaks a second reminder;
+- 10 min after the first reminder, enters `bored` standby;
+- returns to `happy` whenever the user comes back.
+
+During standby, monitoring stays on. The voice uses browser speech synthesis in English, and sound defaults to on. Study timing comes from the server log (`departure_detected`, `reminder_triggered`, `standby_entered`, `user_returned` with latency); nothing new is persisted.
+
+**Reasoning and evidence:**
+The previous v9 mapping (sad on absence, surprised at the reminder, 30 s cooldown, no repeat) did not match the proposal the report describes. See `docs/verification.md` (24 November 2026) for the tests and the live-server sequence check.
+
+**Next step:**
+Teammates must update to protocol 10. The firmware must treat `sad` as the crying reminder face and `surprised` as the brief-absence face. Check speech and the crying face in a browser before the pilot. The CoreS3 face is now `firmware/robot-adapter`, driven over USB serial by `backend/hardware.py` when `POMO_SERIAL_PORT` is set (protocol.md, "Robot Display Serial"). It builds but has not been flashed or tested on the device.
+
+### 2026-11-24-justin-robot-camera
+
+- Date: 2026-11-24 UTC+00:00
+- Author: Justin (task owner) / Claude Code
+- Type: Handoff
+- Related entries: 2026-11-24-justin-proposal-reminder-sequence
+- Context: branch `hardware`; `backend/hardware.py`, `backend/app.py`, `firmware/robot-adapter`, `simulator/`.
+
+**Idea or response:**
+The CoreS3 now provides the face, the voice (recorded clips of both reminders) and, with the new `robot` input source, the camera. Robot frames go through the same face detector and checks as browser frames. The firmware uses TinyUSB serial, so the port name changed to include the board serial number.
+
+**Reasoning and evidence:**
+See `docs/verification.md` (CoreS3 speaker and CoreS3 robot camera, 24 November 2026).
+
+**Next step:**
+Before the study, evaluate detection with the robot camera at the study distance and lighting, since earlier detection checks used the laptop webcam. Decide which camera the study uses and report it.

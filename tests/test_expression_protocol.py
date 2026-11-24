@@ -26,7 +26,7 @@ def test_expression_commands_and_state_transitions():
         runtime = app.state.runtime
         peer = Peer()
         await runtime.connect(peer)
-        assert peer.messages[-1]['protocol_version'] == 9
+        assert peer.messages[-1]['protocol_version'] == 10
         assert peer.messages[-1]['display'] == 'bored'
 
         async def send(**payload):
@@ -52,10 +52,11 @@ def test_expression_commands_and_state_transitions():
                               observed_at=now[0], session_id=runtime.engine.observation_session)
 
         assert (await observe('present'))['display'] == 'happy'
-        assert (await observe('absent'))['display'] == 'sad'
+        assert (await observe('absent'))['display'] == 'surprised'
         for _ in range(4):
             state = await observe('absent')
-        assert state['display'] == 'surprised' and state['reminder']['active']
+        assert state['display'] == 'sad' and state['reminder']['active']
+        assert state['reminder']['stage'] == 1
         assert (await observe('uncertain'))['display'] == 'happy'
         state = await observe('unavailable')
         assert state['observation']['presence'] == 'unavailable'
@@ -71,7 +72,7 @@ def test_expression_commands_and_state_transitions():
     asyncio.run(exercise())
 
 
-def test_websocket_protocol_v9_preview_and_legacy_rejection():
+def test_websocket_protocol_v10_preview_and_legacy_rejection():
     import json
 
     async def exercise():
@@ -94,7 +95,7 @@ def test_websocket_protocol_v9_preview_and_legacy_rejection():
                 return json.loads(message['text'])
 
             initial = await receive()
-            assert initial['protocol_version'] == 9 and initial['display'] == 'bored'
+            assert initial['protocol_version'] == 10 and initial['display'] == 'bored'
             assert initial['observation']['presence'] == initial['camera_observation']['presence'] == 'unavailable'
             await inbound.put({'type': 'websocket.receive', 'text': json.dumps(
                 {'type': 'preview_display', 'display': 'sad'})})

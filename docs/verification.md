@@ -273,6 +273,29 @@ The actual user's camera access, preview, browser/OS permissions and playback
 remain unverified pending the exact on-page error and a manual retry. This change
 improves diagnosis; it does not establish that the no-video report is resolved.
 
+## CoreS3 static display build — 11 November 2026
+
+The standalone `firmware/pomostack` PlatformIO sketch initializes M5Unified and
+renders a static black-and-white face. `pio run -d firmware/pomostack` succeeded
+on macOS with PlatformIO Core 6.2.0, Espressif32 6.9.0, M5Unified 0.3.0 and
+M5GFX 0.3.0. No upload was performed. Physical display rendering and USB
+communication remain unverified; camera capture and the backend adapter are not
+implemented by this sketch.
+
+## CoreS3 standalone camera preview — 11 November 2026
+
+The user subsequently confirmed the static face appeared on the CoreS3. A
+separate `firmware/camera-test` project now builds a local camera preview.
+
+- `/Users/droitxenon/.platformio/penv/bin/pio run -d firmware/camera-test`:
+  passed on macOS with Espressif32 6.9.0, M5Unified 0.3.0 and M5GFX 0.3.0.
+- This camera sketch was not uploaded or tested on physical hardware. Camera
+  capture, frame colors, orientation and stability remain to be verified on the
+  device. It does not record frames or connect to the Pomo backend.
+
+The user later reported that the camera preview works on the CoreS3. Colors,
+orientation and stability were not separately assessed in this merge.
+
 ## Expression identifier rename — 11 November 2026
 
 On the `fix/camera` working tree with the existing Python 3.13 `pomo` environment:
@@ -306,3 +329,40 @@ Synthetic policy and ASGI/WebSocket expression checks cover startup, pause, wake
 ### 2026-11-11: One-second uncertainty threshold
 
 Fake-clock policy checks cover the 0.999/1.000-second boundary, subsequent reminder timing, recovery and configuration overrides. The policy, expression protocol, perception, eyes, configuration and historical behaviour suites passed: 188 tests. Camera integration, browser and physical-camera checks were not run; the earlier TestClient startup stall remains unresolved.
+
+## Merge main into feature/stack — 11 November 2026
+
+- `PYTHONDONTWRITEBYTECODE=1 conda run --no-capture-output --name pomo python -m pytest -q -p no:cacheprovider -o faulthandler_timeout=20`: 279 passed, with the existing Starlette/HTTPX deprecation warning.
+- `node --test tests/test_simulator.js tests/test_simulator.cjs tests/test_camera_client.cjs`: 42 passed. `node --check simulator/app.js` and `node --check simulator/camera.js` also passed.
+- Browser rendering and physical hardware were not tested during this merge. The user previously reported the CoreS3 camera preview works.
+
+## Proposal reminder sequence (protocol 10) — 24 November 2026
+
+- Fake-clock policy tests cover surprised before the first reminder; the first reminder at 10 s measured from the first lost face; the second at +300 s with a new ID; standby at +600 s with no further reminders; return from each stage, including after standby; return-latency log messages; dismissal keeping the schedule; cooldown spacing between departures; and the new configuration validation.
+- `conda run --name pomo python -m pytest -q -p no:cacheprovider`: 281 passed, with the existing Starlette/HTTPX deprecation warning.
+- `node --test tests/test_simulator.js tests/test_simulator.cjs tests/test_camera_client.cjs`: 43 passed, including a stubbed `speechSynthesis` check that each new reminder ID is spoken once and that clearing or muting cancels speech. `node --check simulator/app.js` passed.
+- A live server on port 8011 (`POMO_ABSENCE_SECONDS=3`, `POMO_REMINDER_REPEAT_SECONDS=4`, `POMO_STANDBY_SECONDS=8`) was driven with simulated observations over WebSocket. Displays went happy → surprised (0.6 s) → sad, stage 1 (3.6 s) → sad, stage 2 (7.7 s) → bored standby (11.7 s) → happy on return. The server log showed `departure_detected`, `reminder_triggered` (first, second), `standby_entered` and `user_returned ... after standby`. The server was stopped afterwards.
+- Browser speech output, rendering of the crying face, a physical camera and the CoreS3 were not tested.
+
+## CoreS3 serial adapter (code only) — 24 November 2026
+
+- `tests/test_hardware.py` uses a fake serial port and clock. It checks the compact message, latest-value queueing, duplicate suppression, the unavailable device and retry, write failure and reconnect, the 2-second heartbeat, thread start and close releasing the port, app broadcasts reaching the adapter (an adapter exception does not break broadcasts) and `POMO_SERIAL_PORT`/`POMO_SERIAL_BAUDRATE` validation.
+- `pyserial==3.5` added to `environment.yml`; it was already present in the `pomo` environment. `conda run --name pomo python -m pip check`: no broken requirements.
+- Full suite: 290 passed, with the existing Starlette/HTTPX deprecation warning.
+- `pio run` in `firmware/robot-adapter` built for `m5stack-cores3` without warnings in the sketch (RAM 7.2%, flash 8.3%).
+- The firmware was not uploaded. Rendering, the chime, USB serial with a real device, reconnection after unplugging and the study viewing distance remain untested.
+
+## CoreS3 speaker — 24 November 2026
+
+- The two reminder sentences were recorded with macOS `say` (voice "Flo (English (UK))") into 16 kHz mono WAV clips in `firmware/robot-adapter/include/clips.h`, generated from `REMINDER_MESSAGES`. A pytest check fails if the clips no longer match the text.
+- `pio run` built the firmware without warnings in the sketch (flash 11.9%).
+- New checks: the snapshot reports `robot_display` (`disabled`, `unavailable`, `connected`); while connected the simulator neither speaks nor plays its tone, but still shows the visual reminder and dismissal. Python: 292 passed. Node: 44 passed.
+
+## CoreS3 robot camera — 24 November 2026
+
+- Tests use a fake serial port and synthetic JPEGs; no camera images are stored. They cover frame parsing with noise, partial reads and oversized lengths; the boot line being logged; robot frames driving the engine through the `/camera/frame` checks; the robot token never reaching browsers; serial loss marking the camera unavailable; rejection without a configured or connected robot; and the simulator and camera client never starting browser capture in robot mode. Python: 297 passed. Node: 46 passed.
+- On the connected CoreS3, the first firmware (default USB-Serial-JTAG driver) delivered about 1.5 frames per second and most frames were corrupted. The cause is that driver in Arduino-ESP32 2.0.17 discarding bytes. After switching the sketch to TinyUSB CDC, a 90-second stream gave 450 intact 320x240 frames (5.0 per second) with no disconnects.
+- Both reminder clips were played while streaming; frames continued at about 5 per second, with no restart.
+- A 45-second run through the backend (Robot camera input, monitoring on) processed 225 frames. The display moved through happy, surprised and sad as the face detector reported presence and absence. During one earlier 10-second run the robot restarted once; the cause was not identified, and it did not happen again in later runs.
+- Uploads with the 1200-baud touch left the board in its ROM bootloader. `tools/after_upload.py` now clears the force-download flag and resets the board; one upload was confirmed.
+- Detection accuracy with the robot camera at the study distance, lighting variation and long sessions have not been evaluated.

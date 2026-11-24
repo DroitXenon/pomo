@@ -51,6 +51,7 @@ main { max-width: 1000px; margin: auto; padding: 28px 24px; }
 .right { right: 25px; }
 .robot-name { font-size: 12px; font-weight: 700; letter-spacing: 2px; color: #595959; padding: 12px; }
 .screen[data-display="sad"] .mouth { transform: rotate(180deg); }
+.screen[data-display="sad"] .eyes i::after { content: ""; display: block; width: 6px; height: 12px; margin: 30px 0 0 3px; background: #a3a3a3; border-radius: 50% 50% 50% 50% / 30% 30% 70% 70%; }
 .screen[data-display="surprised"] .eyes i { height: 29px; }
 .screen[data-display="surprised"] .mouth { border: 3px solid #f5f5f5; width: 13px; border-radius: 50%; }
 .screen[data-display="bored"] .eyes i { height: 4px; margin-top: 13px; }

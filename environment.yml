@@ -46,6 +46,7 @@ dependencies:
       - pillow==13.0.0
       - pycparser==3.12
       - pyparsing==3.3.3
+      - pyserial==3.5
       - python-dateutil==3.0.0
       - six==1.17.0
       - sounddevice==0.5.6
