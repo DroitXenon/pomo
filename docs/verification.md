@@ -357,3 +357,12 @@ Fake-clock policy checks cover the 0.999/1.000-second boundary, subsequent remin
 - The two reminder sentences were recorded with macOS `say` (voice "Flo (English (UK))") into 16 kHz mono WAV clips in `firmware/robot-adapter/include/clips.h`, generated from `REMINDER_MESSAGES`. A pytest check fails if the clips no longer match the text.
 - `pio run` built the firmware without warnings in the sketch (flash 11.9%).
 - New checks: the snapshot reports `robot_display` (`disabled`, `unavailable`, `connected`); while connected the simulator neither speaks nor plays its tone, but still shows the visual reminder and dismissal. Python: 292 passed. Node: 44 passed.
+
+## CoreS3 robot camera — 24 November 2026
+
+- Tests use a fake serial port and synthetic JPEGs; no camera images are stored. They cover frame parsing with noise, partial reads and oversized lengths; the boot line being logged; robot frames driving the engine through the `/camera/frame` checks; the robot token never reaching browsers; serial loss marking the camera unavailable; rejection without a configured or connected robot; and the simulator and camera client never starting browser capture in robot mode. Python: 297 passed. Node: 46 passed.
+- On the connected CoreS3, the first firmware (default USB-Serial-JTAG driver) delivered about 1.5 frames per second and most frames were corrupted. The cause is that driver in Arduino-ESP32 2.0.17 discarding bytes. After switching the sketch to TinyUSB CDC, a 90-second stream gave 450 intact 320x240 frames (5.0 per second) with no disconnects.
+- Both reminder clips were played while streaming; frames continued at about 5 per second, with no restart.
+- A 45-second run through the backend (Robot camera input, monitoring on) processed 225 frames. The display moved through happy, surprised and sad as the face detector reported presence and absence. During one earlier 10-second run the robot restarted once; the cause was not identified, and it did not happen again in later runs.
+- Uploads with the 1200-baud touch left the board in its ROM bootloader. `tools/after_upload.py` now clears the force-download flag and resets the board; one upload was confirmed.
+- Detection accuracy with the robot camera at the study distance, lighting variation and long sessions have not been evaluated.

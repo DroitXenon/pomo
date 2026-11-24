@@ -176,3 +176,21 @@ test("a connected robot speaks reminders instead of the browser", async () => {
   socket.receive(snapshot({...base, revision: 3, robot_display: "unavailable", reminder: {active: true, id: 2, stage: 2, message: "Still here."}}));
   assert.deepEqual(b.spoken.map((u) => u.text), ["Still here."], "the browser speaks when the robot is unavailable");
 });
+
+test("robot camera input hides the browser preview and never starts browser capture", () => {
+  const b = browser();
+  const socket = b.sockets[0];
+  socket.receive(snapshot({robot_display: "disabled"}));
+  const robot = b.sources.find((button) => button.dataset.source === "robot");
+  assert.equal(robot.disabled, true, "robot input needs a configured serial port");
+  socket.receive(snapshot({revision: 1, robot_display: "connected"}));
+  assert.equal(robot.disabled, false);
+  b.click(robot);
+  assert.deepEqual(socket.sent.at(-1), {type: "set_input_source", source: "robot"});
+  socket.receive(snapshot({revision: 2, robot_display: "connected", input_source: "robot", monitoring_enabled: true,
+    camera_capture_status: "starting"}));
+  assert.equal(b.elements["camera-panel"].hidden, false);
+  assert.equal(b.elements["camera-view"].hidden, true);
+  assert.equal(b.elements["detection-status"].textContent, "Waiting for robot camera frames");
+  assert.equal(b.cameras.at(-1).session, null, "the browser camera stays off");
+});

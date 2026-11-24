@@ -36,11 +36,12 @@
         <h2>Input source</h2>
         <div class="inputs" role="group" aria-label="Input source">
           <button data-source="camera" disabled>Camera</button>
+          <button data-source="robot" disabled>Robot camera</button>
           <button data-source="simulated" disabled>Simulated</button>
         </div>
         <p id="source-status" class="small">Pause monitoring to change the input source.</p>
         <section id="camera-panel" class="camera-panel" aria-label="Camera preview">
-          <div class="camera-view">
+          <div id="camera-view" class="camera-view">
             <video id="camera-preview" autoplay muted playsinline aria-label="Live camera preview"></video>
             <canvas id="face-overlay" width="640" height="480" aria-hidden="true"></canvas>
           </div>

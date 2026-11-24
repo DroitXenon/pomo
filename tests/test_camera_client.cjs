@@ -247,3 +247,14 @@ test('hidden-tab reason survives unavailable snapshots during permission and act
     assert.equal(camera.session,null);
   }
 });
+
+test('robot camera input never requests the browser camera and reports robot status', async()=>{
+  let requests=0;
+  const {camera,status}=setup(()=>{requests++; return Promise.resolve(stream());});
+  camera.update(state({input_source:'robot',camera_session:null,camera_capture_status:'starting'}));
+  assert.match(status.textContent,/Starting robot camera/);
+  camera.update(state({input_source:'robot',camera_session:null,camera_capture_status:'available'}));
+  assert.equal(status.textContent,'Robot camera active');
+  await flush();
+  assert.equal(requests,0);
+});

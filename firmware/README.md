@@ -2,14 +2,32 @@
 
 ## Robot adapter
 
-`robot-adapter/` is the physical Pomo face. It reads one JSON line per display
-change from the backend over USB serial (format in
+`robot-adapter/` is the physical Pomo: face, voice and camera. It reads one JSON
+line per display change from the backend over USB serial (format in
 [../docs/protocol.md](../docs/protocol.md#robot-display-serial)) and draws the five
 expressions in black and white with M5Unified: happy, surprised, crying `sad` with
 animated tears, bored and idle. Each new reminder is spoken through the CoreS3
 speaker unless sound is muted; the browser stays silent while the robot is
 connected. With no message for 6 seconds the device shows the bored face and
-"No link". It sends nothing back.
+"No link". When the backend selects the Robot camera input, a background task
+streams 320x240 JPEG frames (about 5 per second) back over the same cable; a small
+dot in the top-right corner shows the camera is in use. Frames are not stored or
+shown on the robot. "No camera" in the top-left corner means the camera failed to
+start; reset the robot.
+
+The sketch uses the TinyUSB serial driver (`ARDUINO_USB_MODE=0`) because the
+default USB-Serial-JTAG driver in Arduino-ESP32 2.0.x loses bytes at camera data
+rates. Two consequences:
+
+- The serial port is named after the board's serial number, for example
+  `/dev/cu.usbmodem7C4FADAF80EC1`, and stays the same in any USB socket. Update
+  `POMO_SERIAL_PORT` after the first upload.
+- Uploads reset the board with a 1200-baud touch, and `tools/after_upload.py`
+  restarts it into the new firmware. If an upload cannot find the board, hold the
+  reset button for about 3 seconds (green LED) and upload again.
+
+The camera takes over the CoreS3's internal I2C bus, so the sketch starts the
+speaker first and does not poll touch or the power button (`M5.update()`).
 
 The spoken sentences are recorded clips in `include/clips.h` (about 3.6 s each,
 16 kHz mono, macOS voice "Flo (English (UK))"). They are generated from

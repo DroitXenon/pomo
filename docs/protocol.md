@@ -2,7 +2,7 @@
 
 The backend serves the simulator at `/`, reports health at `/health` and accepts WebSocket connections at `/ws` on the same origin. Use `ws` for HTTP and `wss` for HTTPS.
 
-Version 10 adopts the team proposal's reminder sequence: `surprised` while the user has just left, `sad` (crying) with a spoken first reminder, a second reminder, then `bored` standby. It adds `standby`, `next_step_seconds`, `reminder.stage` and the `repeat_seconds`/`standby_seconds` settings, and new debug event kinds for study timing. Display identifiers and commands are unchanged, but the meaning of `sad` and `surprised` changed, so firmware and simulator must be updated together; v9 and earlier clients are incompatible.
+Version 10 adds the `robot` input source (the CoreS3 camera over USB serial) and adopts the team proposal's reminder sequence: `surprised` while the user has just left, `sad` (crying) with a spoken first reminder, a second reminder, then `bored` standby. It adds `standby`, `next_step_seconds`, `reminder.stage` and the `repeat_seconds`/`standby_seconds` settings, and new debug event kinds for study timing. Display identifiers and commands are unchanged, but the meaning of `sad` and `surprised` changed, so firmware and simulator must be updated together; v9 and earlier clients are incompatible.
 
 Version 9 unified presence values as `present`, `absent`, `uncertain` and `unavailable`. `camera_observation.presence` and `observation.presence` are the same shared value in every snapshot.
 
@@ -151,7 +151,10 @@ Booleans must be JSON booleans, not strings or numbers. Commands accept only the
 ```json
 {"type":"set_input_source","source":"camera"}
 {"type":"set_input_source","source":"simulated"}
+{"type":"set_input_source","source":"robot"}
 ```
+
+`robot` uses the CoreS3 camera through the serial adapter (see "Robot Display Serial") and is rejected when `POMO_SERIAL_PORT` is not configured. Enabling monitoring in robot mode requires `robot_display` to be `connected`. The robot session has no browser owner: every peer receives `camera_session: null`, and frames go through the same checks, size limit, processor and presence normalisation as `/camera/frame`. Timeouts work as for the browser camera, and losing the serial link marks the camera unavailable; pause and enable monitoring (or Retry camera) to start again.
 
 Source changes require power on and monitoring paused. Simulated mode requires
 development controls. Source changes discard input and rotate observation tokens.
@@ -378,10 +381,10 @@ observations do not affect the absence policy or represent screen gaze/attention
 
 ## Robot Display Serial
 
-When `POMO_SERIAL_PORT` names a device (for example `/dev/cu.usbmodem1101` on macOS or `COM5` on Windows), `backend/hardware.py` mirrors the rendered state to the CoreS3 over USB serial at `POMO_SERIAL_BAUDRATE` (default 115200). An empty port disables it. Messages go one way, from backend to device, as one ASCII JSON object per line:
+When `POMO_SERIAL_PORT` names a device (for example `/dev/cu.usbmodem1101` on macOS or `COM5` on Windows), `backend/hardware.py` mirrors the rendered state to the CoreS3 over USB serial at `POMO_SERIAL_BAUDRATE` (default 115200). An empty port disables it. Backend to device: one ASCII JSON object per line:
 
 ```json
-{"v":1,"display":"sad","reminder":3,"stage":1,"sound":true,"standby":false}
+{"v":1,"display":"sad","reminder":3,"stage":1,"sound":true,"standby":false,"camera":false}
 ```
 
 - `v`: serial message version, currently 1. The device ignores other versions.
@@ -390,8 +393,11 @@ When `POMO_SERIAL_PORT` names a device (for example `/dev/cu.usbmodem1101` on ma
 - `stage`: 0, 1 or 2, as in `reminder.stage`.
 - `sound`: false when the shared preference is muted.
 - `standby`: as in the snapshot.
+- `camera`: true while power is on, monitoring is enabled and `input_source` is `robot`; the device streams frames only while it is true.
 
-A message is queued whenever a published snapshot changes these fields; only the newest pending message is kept. A dedicated thread writes it, so the event loop never blocks on the port, and repeats the last message every 2 seconds as a heartbeat. A missing or unplugged device is logged once as unavailable and reopened every 2 seconds; it never stops the server. The firmware in `firmware/robot-adapter` shows the bored face with "No link" when no line arrives for 6 seconds. The device does not send commands; dismissal and controls remain in the simulator.
+Device to backend: binary camera frames, each `PJPG` + uint32 length + uint32 sequence (both little-endian) + a JPEG. The firmware sends 320x240 JPEGs at up to 5 frames per second. The backend resynchronises on `PJPG`, discards frames over `POMO_CAMERA_MAX_BYTES`, and drops frames that arrive while the previous one is still being processed. After each boot the device also sends one text line, `pomo-robot boot reset_reason=<n> camera=<0|1>`, which the backend logs. Frames are never stored or shown on the robot.
+
+A message is queued whenever a published snapshot changes these fields; only the newest pending message is kept. A dedicated thread writes it, so the event loop never blocks on the port, and repeats the last message every 2 seconds as a heartbeat. A missing or unplugged device is logged once as unavailable and reopened every 2 seconds; it never stops the server. The firmware in `firmware/robot-adapter` shows the bored face with "No link" when no line arrives for 6 seconds. The device sends no commands; dismissal and controls remain in the simulator.
 
 The firmware speaks each new non-zero `reminder` once through the CoreS3 speaker, using recorded clips of the stage 1 and stage 2 messages. The first message after the link starts is silent, so an old reminder is never replayed. Speech stops when `reminder` becomes 0 (return, dismissal or standby), when `sound` becomes false, or when the link times out. While `robot_display` is `connected`, the simulator does not speak or play its tone.
 

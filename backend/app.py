@@ -45,7 +45,7 @@ class SetMuted(StrictCommand):
 
 class SetInputSource(StrictCommand):
     type: Literal["set_input_source"]
-    source: Literal["camera", "simulated"]
+    source: Literal["camera", "simulated", "robot"]
 
 
 class CameraFailed(StrictCommand):
@@ -80,6 +80,18 @@ Command = Annotated[
     Field(discriminator="type"),
 ]
 COMMANDS = TypeAdapter(Command)
+
+
+class _RobotFrameRequest:
+    """Present a robot-camera JPEG through the same checks as a browser upload."""
+
+    def __init__(self, token, sequence, data):
+        self.headers = {"x-camera-session": token, "x-frame-sequence": str(sequence),
+                        "content-type": "image/jpeg"}
+        self._data = data
+
+    async def stream(self):
+        yield self._data
 
 
 class Runtime:
@@ -235,12 +247,13 @@ class Runtime:
 
     def _tick_locked(self):
         before_session = self.engine.observation_session
-        if self.camera_owner is not None:
+        if self.camera_session is not None:
             limit = (self.camera_config.startup_seconds
                      if self.camera_capture_status == "starting"
                      else self.camera_config.timeout_seconds)
-            if (self.camera_owner not in self.clients or self.last_input is None
-                    or self.clock() - self.last_input >= limit):
+            if (self.input_source == "camera" and self.camera_owner not in self.clients
+                    or self.input_source == "robot" and self.robot_display_status() != "connected"
+                    or self.last_input is None or self.clock() - self.last_input >= limit):
                 self._camera_failed("Camera input timed out or disconnected.")
             elif (self._last_camera_observed is not None
                   and self.clock() - self._last_camera_observed
@@ -293,26 +306,31 @@ class Runtime:
             self._release_camera()
             self.producer = None
             return
-        if self.input_source != "camera":
+        if self.input_source == "simulated":
             self.engine.set_monitoring(True)
             return
         if not self.engine.powered_on:
             raise ValueError("Power on Pomo before enabling monitoring")
         if not self.worker_ready:
             raise ValueError("Camera processor unavailable; check model setup or select simulated input")
-        if self.camera_owner is not None:
-            if self.camera_owner is not ws:
+        robot = self.input_source == "robot"
+        if robot and self.robot_display_status() != "connected":
+            raise ValueError("Robot not connected; check the USB cable and POMO_SERIAL_PORT")
+        if self.camera_session is not None:
+            if not robot and self.camera_owner is not ws:
                 raise ValueError("Camera is already owned by another monitoring tab")
             return
         changed = self.engine.set_monitoring(True)
         if not changed:
             self.engine.invalidate_observations("Camera input restarted", level="info")
         self._release_camera("starting")
-        self.camera_owner = ws
+        # The robot camera has no WebSocket owner; its token never leaves the backend.
+        self.camera_owner = None if robot else ws
         self.camera_session = secrets.token_urlsafe(32)
         self.last_input = self.clock()
         self.camera_tracking_status = "awaiting_face"
-        self.engine.record("camera_started", "Camera capture requested from the monitoring tab.")
+        self.engine.record("camera_started", "Robot camera capture requested." if robot
+                           else "Camera capture requested from the monitoring tab.")
 
     async def dispatch(self, command, ws):
         async with self.lock:
@@ -331,6 +349,8 @@ class Runtime:
                         raise ValueError("Input changes require power on and monitoring paused")
                     if command.source == "simulated" and not self.dev_controls:
                         raise ValueError("Simulated observations are disabled")
+                    if command.source == "robot" and self.display_adapter is None:
+                        raise ValueError("Robot camera needs POMO_SERIAL_PORT")
                     if command.source != self.input_source:
                         self.input_source = command.source
                         self._release_camera()
@@ -557,6 +577,17 @@ class Runtime:
             else:
                 self.busy = False
 
+    async def robot_frame(self, data):
+        """Process one robot-camera JPEG; frames arriving while busy are dropped."""
+        if self.input_source != "robot" or not self.camera_session or self.busy:
+            return False
+        try:
+            await self.camera_frame(_RobotFrameRequest(self.camera_session, self.last_sequence + 1, data))
+        except HTTPException as error:
+            LOG.debug("Robot frame dropped: %s", error.detail)
+            return False
+        return True
+
     async def close(self):
         async with self.lock:
             self._release_camera()
@@ -602,6 +633,16 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app):
         if display_adapter is not None:
+            loop = asyncio.get_running_loop()
+            in_flight = None
+
+            def on_frame(data):
+                # Serial thread: keep at most one robot frame queued on the loop.
+                nonlocal in_flight
+                if in_flight is None or in_flight.done():
+                    in_flight = asyncio.run_coroutine_threadsafe(runtime.robot_frame(data), loop)
+
+            display_adapter.on_frame = on_frame
             display_adapter.start()
             async with runtime.lock:
                 runtime._publish_display(runtime.snapshot())
@@ -615,10 +656,10 @@ def create_app(
                 with suppress(asyncio.CancelledError):
                     await ticker
             try:
-                await runtime.close()
-            finally:
                 if display_adapter is not None:
                     await asyncio.to_thread(display_adapter.close)
+            finally:
+                await runtime.close()
 
     app = FastAPI(title="Pomo simulator", lifespan=lifespan)
     app.state.runtime = runtime

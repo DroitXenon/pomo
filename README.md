@@ -89,9 +89,10 @@ The source selector is a development control; production-style operation uses
 camera input. [Protocol v10](docs/protocol.md) defines both paths. The previous
 standalone `backend/behaviour.py` remains for historical regression tests; the live
 application has one reminder policy in `backend/policy.py`. With
-`POMO_SERIAL_PORT` set, `backend/hardware.py` mirrors the face to a CoreS3 running
-`firmware/robot-adapter` over USB serial (built, not yet checked on the device).
-The CoreS3 camera is not used; the laptop webcam remains the input.
+`POMO_SERIAL_PORT` set, `backend/hardware.py` connects a CoreS3 running
+`firmware/robot-adapter` over USB: the robot shows the face, speaks reminders and,
+with the **Robot camera** input selected, streams its camera to the same face
+detector used for the browser webcam.
 
 ## Runtime and Dependencies
 
@@ -159,7 +160,7 @@ The backend reads `.env` from the repository root. Process environment variables
 | `POMO_REMINDER_COOLDOWN_SECONDS` | `0` | Optional minimum gap between first reminders of separate departures; finite and non-negative |
 | `POMO_OBSERVATION_TIMEOUT_SECONDS` | `3` | Maximum observation age; finite and greater than zero |
 | `POMO_SOUND_ENABLED` | `true` | Initial shared sound preference; each browser still needs a user gesture for audio |
-| `POMO_SERIAL_PORT` | empty | CoreS3 USB serial device for the physical robot face (for example `/dev/cu.usbmodem1101`); empty disables it |
+| `POMO_SERIAL_PORT` | empty | CoreS3 USB serial device (on macOS `ls /dev/cu.usbmodem*`; with the current firmware the name contains the board's serial number); empty disables the robot |
 | `POMO_SERIAL_BAUDRATE` | `115200` | Serial speed; must match `firmware/robot-adapter` |
 
 Boolean settings accept `true` or `false`, case-insensitively. Invalid settings fail at startup.
@@ -223,7 +224,7 @@ camera transport remains available. All timing uses the backend's monotonic cloc
 ## Observations, Expressions and Reminders
 
 An **observation** is the presence value currently used by the backend's reminder
-policy. It comes from the selected Camera or Simulated input. An **expression** is
+policy. It comes from the selected Camera (browser webcam), Robot camera (CoreS3) or Simulated input. An **expression** is
 the robot face selected by that policy; the same observation can produce different
 expressions depending on elapsed time, cooldown, monitoring and power. These values
 describe face presence and input quality, not whether someone is paying attention.
@@ -347,7 +348,9 @@ Manual simulator demonstration:
 7. Power off and wake Pomo. Verify wake leaves monitoring paused.
 8. Open a second tab and check shared state. Reconnect a viewer without replaying sound; disconnect the observation-producing tab and check the Bored expression.
 
-For a camera demonstration, pause, select Camera, enable and grant permission. Leave a well-lit, sufficiently detailed scene for the uncertainty period plus absence threshold. Check the reminder sequence, dismissal and return. Test denied permission, owner-tab closure, hidden tabs and interruption; explicitly retry with a fresh session. Physical validation is still needed.
+For the robot camera, start the backend with `POMO_SERIAL_PORT`, wait for Robot: Connected in the diagnostics, pause, select Robot camera and enable monitoring. A small dot in the robot's top-right corner shows the camera is streaming.
+
+For a browser camera demonstration, pause, select Camera, enable and grant permission. Leave a well-lit, sufficiently detailed scene for the uncertainty period plus absence threshold. Check the reminder sequence, dismissal and return. Test denied permission, owner-tab closure, hidden tabs and interruption; explicitly retry with a fresh session. Physical validation is still needed.
 
 The debug panel shows current observation/source/age, absence duration, cooldown, reminder stage, time to the next step, actual state and backend events. Clearing the browser log clears that tab's view only; it does not erase shared backend history.
 

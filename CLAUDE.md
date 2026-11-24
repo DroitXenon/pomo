@@ -38,7 +38,7 @@ Single process, single worker: FastAPI serves the static simulator at `/`, `/hea
 - `backend/config.py` builds validated config dataclasses from `.env` plus process env (env wins); invalid values fail at startup. `backend/__main__.py` loads config and starts Uvicorn.
 - `backend/behaviour.py` is a legacy standalone policy kept only for historical regression tests (`tests/test_behaviour.py`); do not wire it into the app.
 - `simulator/app.js` renders backend snapshots and sends commands (no client-side state machine); `simulator/camera.js` handles `getUserMedia` capture and sequential JPEG uploads for the owning tab. Node tests drive them with fake DOM/WebSocket helpers in `tests/simulator_helpers.cjs`.
-- `backend/hardware.py` (`SerialDisplay`) is the optional one-way USB serial adapter (`POMO_SERIAL_PORT`): each broadcast snapshot becomes a JSON line written from its own thread. `firmware/robot-adapter` renders those lines on the CoreS3; `display-test/` and `camera-test/` are standalone tests.
+- `backend/hardware.py` (`SerialDisplay`) is the optional USB serial adapter (`POMO_SERIAL_PORT`), running all serial I/O on its own thread. Each broadcast snapshot becomes a JSON line to the CoreS3; framed JPEGs from the robot camera come back and are passed to `Runtime.robot_frame`, which reuses the `/camera/frame` checks and processor (input source `robot`). `firmware/robot-adapter` renders the face, plays recorded reminder clips and streams the camera; `display-test/` and `camera-test/` are standalone tests.
 
 Policy tests (`tests/test_policy.py`) use synthetic observations and a fake clock; app/WebSocket tests use FastAPI's TestClient and `tests/camera_helpers.py` instead of a real camera or model.
 

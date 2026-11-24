@@ -1,19 +1,24 @@
-"""Optional USB serial adapter that mirrors backend display state to the CoreS3.
+"""Optional USB serial adapter for the CoreS3 robot.
 
-The backend remains the only owner of behaviour. This adapter converts each
-published snapshot into one compact JSON line and writes it from a dedicated
-thread, so a slow or missing device never blocks the event loop. Messages are
-one-way; the device only renders them.
+The backend remains the only owner of behaviour. Host to device: each
+published snapshot becomes one compact JSON line (display, reminder, sound and
+whether the robot camera should stream). Device to host: binary JPEG frames
+from the robot camera, framed as MAGIC + uint32 length + uint32 sequence
+(little-endian) + JPEG bytes. A dedicated thread does all serial I/O, so a slow
+or missing device never blocks the event loop.
 """
 
 import json
 import logging
 import queue
+import struct
 import threading
 import time
 
 LOG = logging.getLogger("pomo.hardware")
 MESSAGE_VERSION = 1
+FRAME_MAGIC = b"PJPG"
+FRAME_HEADER = struct.Struct("<4sII")
 
 
 def display_message(snapshot):
@@ -26,14 +31,50 @@ def display_message(snapshot):
         "stage": reminder["stage"],
         "sound": not snapshot["muted"],
         "standby": snapshot["standby"],
+        "camera": bool(snapshot.get("input_source") == "robot" and snapshot.get("powered_on")
+                       and snapshot.get("monitoring_enabled")),
     }
+
+
+class FrameParser:
+    """Extract framed JPEGs from the device byte stream, resynchronising on MAGIC."""
+
+    def __init__(self, max_bytes):
+        self.max_bytes = max_bytes
+        self.buffer = bytearray()
+
+    def reset(self):
+        self.buffer.clear()
+
+    def feed(self, data):
+        self.buffer.extend(data)
+        frames = []
+        while True:
+            start = self.buffer.find(FRAME_MAGIC)
+            if start < 0:
+                # Keep a possible partial MAGIC at the end; drop other noise.
+                del self.buffer[:max(0, len(self.buffer) - (len(FRAME_MAGIC) - 1))]
+                return frames
+            del self.buffer[:start]
+            if len(self.buffer) < FRAME_HEADER.size:
+                return frames
+            _, length, _sequence = FRAME_HEADER.unpack_from(self.buffer)
+            if not 0 < length <= self.max_bytes:
+                del self.buffer[:len(FRAME_MAGIC)]
+                continue
+            end = FRAME_HEADER.size + length
+            if len(self.buffer) < end:
+                return frames
+            frames.append(bytes(self.buffer[FRAME_HEADER.size:end]))
+            del self.buffer[:end]
 
 
 class SerialDisplay:
     """Latest-value serial writer with reconnect and explicit shutdown."""
 
     def __init__(self, port, baudrate=115200, *, serial_factory=None,
-                 clock=time.monotonic, retry_seconds=2.0, heartbeat_seconds=2.0):
+                 clock=time.monotonic, retry_seconds=2.0, heartbeat_seconds=2.0,
+                 max_frame_bytes=524288, read_timeout=0.05):
         self.port = port
         self.baudrate = baudrate
         self._serial_factory = serial_factory
@@ -49,6 +90,10 @@ class SerialDisplay:
         self._pending = queue.Queue(maxsize=1)
         self._stop = threading.Event()
         self._thread = None
+        self.read_timeout = read_timeout
+        self.parser = FrameParser(max_frame_bytes)
+        self.on_frame = None  # Called on the serial thread with each JPEG.
+        self.frames_received = 0
 
     def publish(self, snapshot):
         """Queue the newest message without blocking; older pending ones are replaced."""
@@ -81,10 +126,36 @@ class SerialDisplay:
     def _run(self):
         while not self._stop.is_set():
             try:
-                message = self._pending.get(timeout=min(self.heartbeat_seconds, self.retry_seconds))
+                # With an open port, the blocking serial read paces the loop.
+                message = (self._pending.get_nowait() if self._device is not None
+                           else self._pending.get(timeout=self.read_timeout))
             except queue.Empty:
                 message = None
             self.deliver(message)
+            self.receive()
+
+    def receive(self):
+        """Read available device bytes and hand complete JPEG frames to on_frame."""
+        if self._device is None:
+            return 0
+        try:
+            data = self._device.read(65536)
+        except Exception as error:
+            self._fail(error)
+            return 0
+        if data and b"pomo-robot " in data:
+            # Best-effort: the firmware sends one plain-text status line per boot.
+            line = data[data.index(b"pomo-robot "):].split(b"\n", 1)[0][:120]
+            LOG.info("Robot: %s", line.decode("ascii", "replace"))
+        frames = self.parser.feed(data) if data else []
+        for frame in frames:
+            self.frames_received += 1
+            if self.on_frame is not None:
+                try:
+                    self.on_frame(frame)
+                except Exception:
+                    LOG.exception("Robot camera frame handler failed")
+        return len(frames)
 
     def deliver(self, message=None):
         """Write a new message, or repeat the last one as a heartbeat when due."""
@@ -122,7 +193,8 @@ class SerialDisplay:
             if factory is None:
                 import serial
                 factory = serial.Serial
-            self._device = factory(self.port, self.baudrate, timeout=0, write_timeout=1)
+            self._device = factory(self.port, self.baudrate, timeout=self.read_timeout, write_timeout=1)
+            self.parser.reset()
         except Exception as error:
             if self.status != "unavailable":
                 LOG.warning("Robot display unavailable on %s: %s", self.port, error)

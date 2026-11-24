@@ -54,7 +54,7 @@ function validSnapshot(next) {
     ["dev_controls", "powered_on", "monitoring_enabled", "muted"].every((key) => typeof next[key] === "boolean") &&
     Object.hasOwn(displayLabels, next.display) && Object.hasOwn(displayLabels, next.behavior_state) &&
     ["available", "unavailable"].includes(next.camera_status) &&
-    ["camera", "simulated"].includes(next.input_source) &&
+    ["camera", "simulated", "robot"].includes(next.input_source) &&
     ["paused", "starting", "available", "unavailable"].includes(next.camera_capture_status) &&
     typeof next.camera_processor_ready === "boolean" && cameraSettings &&
     (next.camera_session === null || (typeof next.camera_session === "string" && next.camera_session.length > 0 &&
@@ -78,7 +78,7 @@ function validSnapshot(next) {
 
 function controls(isConnected) {
   $("monitor").disabled = !isConnected || !state?.powered_on ||
-    (!state.monitoring_enabled && state.input_source === "camera" && !state.camera_processor_ready);
+    (!state.monitoring_enabled && state.input_source !== "simulated" && !state.camera_processor_ready);
   $("power").disabled = !isConnected;
   $("sound").disabled = !isConnected;
   $("dismiss").disabled = !isConnected || !state?.reminder.active;
@@ -90,10 +90,11 @@ function controls(isConnected) {
   $("clear-preview").disabled = !canPreview;
   document.querySelectorAll("[data-source]").forEach((button) => {
     button.disabled = !isConnected || !state?.powered_on || state.monitoring_enabled ||
-      (button.dataset.source === "simulated" && !state.dev_controls);
+      (button.dataset.source === "simulated" && !state.dev_controls) ||
+      (button.dataset.source === "robot" && state.robot_display === "disabled");
   });
   $("retry-camera").disabled = !isConnected || !state?.powered_on || !state.monitoring_enabled ||
-    state.input_source !== "camera" || !state.camera_processor_ready || state.camera_capture_status !== "unavailable";
+    state.input_source === "simulated" || !state.camera_processor_ready || state.camera_capture_status !== "unavailable";
 }
 
 function stopSimulation() {
@@ -248,9 +249,10 @@ function renderCameraDiagnostics(next) {
     stale: "Detection result too old · detection paused"
   };
   let detectionStatus;
-  if (next.input_source !== "camera") detectionStatus = "Camera detection off · simulated input selected";
+  if (next.input_source === "simulated") detectionStatus = "Camera detection off · simulated input selected";
   else if (!next.powered_on || !next.monitoring_enabled) detectionStatus = "Detection paused";
-  else if (next.camera_capture_status === "starting") detectionStatus = "Waiting for camera frames";
+  else if (next.camera_capture_status === "starting")
+    detectionStatus = next.input_source === "robot" ? "Waiting for robot camera frames" : "Waiting for camera frames";
   else if (next.camera_tracking_status === "uncertain" && Object.hasOwn(uncertainReasons, observation?.reason))
     detectionStatus = uncertainReasons[observation.reason];
   else detectionStatus = (Object.hasOwn(statuses, next.camera_tracking_status) ? statuses[next.camera_tracking_status] : null) ||
@@ -322,15 +324,17 @@ function render(next, initialSnapshot) {
   setText("observation-current", presenceLabels[state.observation.presence]);
   setText("observation-source", sourceLabels[state.observation.source]);
   setText("input-status", state.camera_status === "available" ? "Available" : "Unavailable");
-  $("camera-panel").hidden = state.input_source !== "camera";
+  $("camera-panel").hidden = state.input_source === "simulated";
+  $("camera-view").hidden = state.input_source !== "camera";
   $("simulation-panel").hidden = state.input_source !== "simulated";
   document.querySelectorAll("[data-source]").forEach((button) => {
     button.setAttribute("aria-pressed", String(button.dataset.source === state.input_source));
   });
   setText("source-status", state.monitoring_enabled ? "Pause monitoring to change the input source." :
-    state.input_source === "camera" && !state.camera_processor_ready ? "Camera processor unavailable. Simulated input is available for development." :
+    state.input_source !== "simulated" && !state.camera_processor_ready ? "Camera processor unavailable. Simulated input is available for development." :
+    state.input_source === "robot" && state.robot_display !== "connected" ? "Robot not connected. Check the USB cable, then enable monitoring." :
     !state.dev_controls ? "Camera input selected. Development simulation is disabled." : "Select a source, then enable monitoring.");
-  $("retry-camera").hidden = state.input_source !== "camera" || !state.powered_on || !state.monitoring_enabled ||
+  $("retry-camera").hidden = state.input_source === "simulated" || !state.powered_on || !state.monitoring_enabled ||
     !state.camera_processor_ready || state.camera_capture_status !== "unavailable";
   camera.update(state);
   renderCameraDiagnostics(state);

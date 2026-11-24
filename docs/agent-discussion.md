@@ -318,3 +318,20 @@ The previous v9 mapping (sad on absence, surprised at the reminder, 30 s cooldow
 
 **Next step:**
 Teammates must update to protocol 10. The firmware must treat `sad` as the crying reminder face and `surprised` as the brief-absence face. Check speech and the crying face in a browser before the pilot. The CoreS3 face is now `firmware/robot-adapter`, driven over USB serial by `backend/hardware.py` when `POMO_SERIAL_PORT` is set (protocol.md, "Robot Display Serial"). It builds but has not been flashed or tested on the device.
+
+### 2026-11-24-justin-robot-camera
+
+- Date: 2026-11-24 UTC+00:00
+- Author: Justin (task owner) / Claude Code
+- Type: Handoff
+- Related entries: 2026-11-24-justin-proposal-reminder-sequence
+- Context: branch `hardware`; `backend/hardware.py`, `backend/app.py`, `firmware/robot-adapter`, `simulator/`.
+
+**Idea or response:**
+The CoreS3 now provides the face, the voice (recorded clips of both reminders) and, with the new `robot` input source, the camera. Robot frames go through the same face detector and checks as browser frames. The firmware uses TinyUSB serial, so the port name changed to include the board serial number.
+
+**Reasoning and evidence:**
+See `docs/verification.md` (CoreS3 speaker and CoreS3 robot camera, 24 November 2026).
+
+**Next step:**
+Before the study, evaluate detection with the robot camera at the study distance and lighting, since earlier detection checks used the laptop webcam. Decide which camera the study uses and report it.
