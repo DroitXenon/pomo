@@ -1,485 +1,440 @@
 # Pomo
 
-Pomo is a small desktop robot designed to be a friendly study companion. It aims to support consistent study habits through simple facial expressions and gentle reminders.
+Pomo is a desktop robot study companion. A camera watches whether the user is at the desk; when they leave, a backend policy drives a sequence of facial expressions and spoken reminders, rendered on an M5Stack CoreS3 and in a browser control page.
 
-## Phase
+The system is a single Python process (FastAPI + MediaPipe) that owns all behaviour, a dependency-free browser client that renders state and provides development controls, and optional CoreS3 firmware that mirrors the face, speaks reminders and streams its own camera over USB.
 
-### Phase 1: Set Up the Env
+> Presence detection answers one question: is a usable face in frame? It does not measure attention, focus or distraction, and camera or connection failure is reported as unavailable input, never as user absence.
 
-Establish the prototype scope, select and document libraries, organise the repository, configure ports and connect the simulator to the backend.
+## Contents
 
-The current foundation includes:
+- [System overview](#system-overview)
+- [Quick start](#quick-start)
+- [Architecture](#architecture)
+- [Reminder policy](#reminder-policy)
+- [Perception pipeline](#perception-pipeline)
+- [Interfaces](#interfaces)
+- [Robot hardware](#robot-hardware)
+- [Control page](#control-page)
+- [Configuration](#configuration)
+- [Testing and verification](#testing-and-verification)
+- [Deployment and security](#deployment-and-security)
+- [Repository layout](#repository-layout)
+- [Project status](#project-status)
 
-- A `pomo` Conda environment, repeatable setup and configurable startup.
-- FastAPI HTTP routes and a WebSocket transport with strict command validation.
-- A monochrome simulator with a placeholder robot face, monitoring control and five manual expression previews.
-- Shared state broadcasts, connection status, automatic reconnection and a bounded connection journal.
-- Integration tests covering routes, commands, broadcasts and state recovery.
-
-The prototype scope is camera detection, robot display and reminders. Pomodoro timing, session controls and voice recognition are deferred.
-
-### Phase 2: Add Basic Functions
-
-Implemented: browser webcam capture, bounded JPEG transport, Face Landmarker presence/head diagnostics, and one five-state reminder policy. Camera and simulated input both drive the robot display, global monitoring, soft power, dismissal, configurable cooldown, optional sound/mute and bounded debug logs. Physical-camera evaluation remains pending.
-
-The first detection target is whether the user leaves the frame. Presence observations do not establish concentration or distraction. Fresh uncertain observations show happy and become absent after one second by default; missing or disconnected input remains unavailable.
-
-Implementation follows the [Reminders](https://app.notion.com/p/40a66acb0c0380f5bacfc18ac6fa598a), [States Implementation](https://app.notion.com/p/40a66acb0c0380deaf4fd7dbefb28b04), [Debug Logs](https://app.notion.com/p/40a66acb0c0380078ca4ef9dcfaed7e9) and [Camera Detection](https://app.notion.com/p/40a66acb0c038013b8b5eb483fa9e18e) specifications. Defaults are configurable; camera frames are processed in memory without recording or persistence.
-
-### Phase 3: Test and Validate
-
-Automated checks cover policy transitions, timing boundaries, dismissal, cooldown, pause/resume, observation freshness, source disconnect/reconnect, strict message validation, configuration and simulator behaviour. Policy timing uses injected clocks rather than test sleeps or camera hardware.
-
-Remaining validation includes real camera lifecycle/permissions, lighting and position evaluation, usability with teammates, installation on other platforms and physical integration. Record false reminders, missed events and known limitations before making detection-quality claims.
-
-## Architecture
-
-### Current data flow
+## System overview
 
 ```text
-Browser camera → bounded JPEG POST /camera/frame → dedicated model worker
-  │ fresh presence metadata + baseline/tracking-loss gate
-  ├───────────────────────────────────────────────────────┐
-Browser controls / simulated observations over /ws        │
-  ▼                                                      ▼
-FastAPI transport → camera-independent ReminderEngine
-  │ monotonic timing, lifecycle tokens, reminder policy
-  │ 250 ms timer for expiry, thresholds and live diagnostics
-  ▼
-Complete shared state snapshots → all connected simulators
+                 ┌────────────────────────── one Python process (python -m backend) ──────────────────────────┐
+Browser webcam ─▶│ POST /camera/frame ─┐                                                                       │
+                 │                     ├─▶ FrameProcessor ─▶ presence normaliser ─▶ ReminderEngine ─▶ snapshot ─┼─▶ /ws ─▶ all browser tabs
+CoreS3 camera ──▶│ serial PJPG frames ─┘    (worker thread:     (baseline, grace,     (policy,        (revisioned │
+ (USB, optional) │                           JPEG decode +        max age)              timers,          complete    │
+                 │ /ws commands ───────────────────────────────────────────────────────▶ events)         state)     ├─▶ SerialDisplay ─▶ CoreS3 face + speaker
+                 │   (simulated input, monitoring, power, mute, dismiss, previews)                                    │     (serial thread)
+                 └────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-`backend/policy.py` owns behaviour independently of camera devices and rendering. `backend/app.py` serialises policy operations and broadcasts with an `asyncio.Lock`. `backend/config.py` validates environment settings; `backend/__main__.py` starts Uvicorn.
-
-One process serves static assets, health and WebSocket traffic. Accepted commands and published timer changes advance a revision counter. Failed sends time out after two seconds per client. If the last accepted observation producer disconnects, its input and active reminder are invalidated; a viewer disconnect does not clear another source.
-
-All clients control one in-memory robot. Restart resets state, history and counters and creates a new instance ID. Use one backend worker. Persistence, separate user sessions and cross-process state synchronisation are not implemented.
-
-### Camera capture and policy integration
-
-Select **Camera** while monitoring is paused, enable monitoring and grant browser
-permission. Only that tab receives the session token for sequential JPEG uploads;
-other tabs observe shared state without acquiring the webcam. Capture uses
-`getUserMedia`, including when the Python backend runs in WSL. Open the app in the
-host browser at localhost, or use a validated HTTPS origin. Uploaded pixels are
-unmirrored; the development preview is mirrored locally.
-
-`backend/camera.py` keeps JPEG decoding and Face Landmarker on one dedicated
-worker. It checks streamed size and JPEG dimensions before decoding. Session,
-sequence and age checks prevent paused/replaced or stale frames from reviving
-monitoring. Pause, power-off, source change, owner loss, hidden tabs and capture
-failure release or invalidate capture. Frames never enter logs or persistent
-storage. The versioned model URL/checksum are in [models/README.md](models/README.md).
-
-`backend/app.py` adapts raw camera observations to `ReminderEngine`. Stable visible
-presence (default 0.5 s) establishes a diagnostic baseline. Missing faces produce
-uncertain observations; continuous uncertainty becomes absent after one second by
-default, including initial non-detection. Five further seconds of continuous fresh absence triggers a reminder by default. Poor light and blur can therefore lead to an absence reminder. Stale input remains unavailable. Observation
-freshness (1 s) is independent of the capture idle timeout (3 s).
-
-The simulator shows a live detection description below the camera status, plus
-preview, face box, presence, quality reason, head direction, angles, raw absence
-duration and policy cooldown. Retained eye/mouth observations
-are experimental diagnostics inside collapsed details; they do not
-establish attention or trigger reminders. Physical accuracy remains unverified.
-
-Select **Simulated** while paused to test the same reminder engine without camera
-access or a usable model. Then enable monitoring and choose a synthetic observation.
-The source selector is a development control; production-style operation uses
-camera input. [Protocol v10](docs/protocol.md) defines both paths. The previous
-standalone `backend/behaviour.py` remains for historical regression tests; the live
-application has one reminder policy in `backend/policy.py`. With
-`POMO_SERIAL_PORT` set, `backend/hardware.py` connects a CoreS3 running
-`firmware/robot-adapter` over USB: the robot shows the face, speaks reminders and,
-with the **Robot camera** input selected, streams its camera to the same face
-detector used for the browser webcam.
-
-## Runtime and Dependencies
-
-| Component | Current choice | Responsibility |
+| Concern | Owner | Notes |
 | --- | --- | --- |
-| Runtime | Python 3.13 in Conda | Backend and perception processing |
-| HTTP and validation | FastAPI 0.162.0, Pydantic 2.14.1 | Routes, command schema and input validation |
-| Server and transport | Uvicorn 0.54.0, websockets 17.3 | ASGI serving and WebSocket connections |
-| Interface | Plain HTML, CSS and JavaScript | Robot rendering and development controls |
-| Camera processing | OpenCV contrib 5.0.0.93, MediaPipe 1.2.0 | JPEG decoding and face/head/eye observations |
-| Configuration | python-dotenv 1.2.4 | Local configuration with environment overrides |
-| Tests | pytest 9.1.1, HTTPX 0.28.1 | HTTP/WebSocket integration checks |
+| Behaviour and timing | `backend/policy.py` `ReminderEngine` | Camera-independent; injected monotonic clock; the only live policy |
+| Transport, ownership, serialisation | `backend/app.py` `Runtime` | Strict commands, one `asyncio.Lock`, 250 ms tick, camera session tokens |
+| Perception | `backend/camera.py`, `perception.py`, `eyes.py` | MediaPipe Face Landmarker on a dedicated worker; eye/head data is diagnostic only |
+| Hardware | `backend/hardware.py` `SerialDisplay` | Optional; all serial I/O on its own thread |
+| Rendering and controls | `simulator/` | Plain HTML/CSS/JS, no build step, no client-side state machine |
+| Firmware | `firmware/robot-adapter` | PlatformIO, M5Unified, TinyUSB CDC |
 
-[`environment.yml`](environment.yml) is the dependency definition. Conda resolves Python 3.13 and pip from `conda-forge`; its `pip` section pins the existing application, transitive and test packages. Python patch releases and pip are not locked to exact versions.
+## Quick start
 
-No frontend build step or Node.js runtime is required. The camera dependencies are pinned in the same environment definition; Linux EGL/GLES entries use platform selectors. See [stack choices](docs/stack.md) for the implementation rationale.
-
-## Setup and Run
-
-Install Conda through Miniconda or Miniforge, then run from the repository root:
+Requirements: Conda (Miniconda or Miniforge). Node.js is optional and only used for the JavaScript tests. PlatformIO is only needed to flash the robot.
 
 ```sh
-sh scripts/setup.sh
-sh scripts/dev.sh
+sh scripts/setup.sh     # create/update the pomo env (Python 3.13), download + checksum models/face_landmarker.task
+sh scripts/dev.sh       # start on http://127.0.0.1:8000/ with live logs; Ctrl+C to stop
 ```
 
-Setup creates or updates the named `pomo` environment and downloads/checks the versioned model. Recent Conda reads CEP-24 selectors directly; the shell script also supports Conda 25 using a temporary platform-filtered copy of the same definition. Startup uses `conda run` to select it automatically and streams server logs to the terminal.
+Then open [http://127.0.0.1:8000/](http://127.0.0.1:8000/), pick an input source while monitoring is paused, and enable monitoring.
 
-Open [http://127.0.0.1:8000/](http://127.0.0.1:8000/). Stop the backend with Ctrl+C.
+| Input source | Use | Requirement |
+| --- | --- | --- |
+| **Camera** | Browser webcam via `getUserMedia` | Camera permission; page served from `localhost` or HTTPS |
+| **Robot camera** | CoreS3 camera streamed over USB | `POMO_SERIAL_PORT` set and the robot connected |
+| **Simulated** | Synthetic `present` / `absent` / `uncertain` / `unavailable` heartbeats | `POMO_DEV_CONTROLS=true` (default) |
 
-For local configuration, copy `.env.example` to `.env` once and edit the values. Preserve an existing `.env` when rerunning setup; defaults work without this file.
-
-### Direct Conda commands
-
-For Windows without `sh`, use recent Conda with CEP-24 support:
+Useful variants:
 
 ```sh
-conda env create --file environment.yml --format cep-24
+POMO_PORT=8001 sh scripts/dev.sh                                    # second server on a free port
+POMO_SERIAL_PORT=/dev/cu.usbmodem7C4FADAF80EC1 sh scripts/dev.sh     # with the robot (or set it in .env)
+POMO_ABSENCE_SECONDS=3 POMO_REMINDER_REPEAT_SECONDS=10 POMO_STANDBY_SECONDS=20 sh scripts/dev.sh   # short demo timings
+```
+
+Without `sh` (for example on Windows), use Conda directly; recent Conda reads the CEP-24 platform selectors in `environment.yml`:
+
+```sh
+conda env create --file environment.yml --format cep-24      # or: conda env update --name pomo --file environment.yml --format cep-24 --prune
 conda activate pomo
 python scripts/setup_model.py
 python -m backend
 ```
 
-For an existing environment, update it instead of creating it again:
+`scripts/setup.sh` also supports Conda 25 by filtering a temporary copy of the same definition. Copy `.env.example` to `.env` for local settings; existing `.env` files are preserved.
 
-```sh
-conda env update --name pomo --file environment.yml --format cep-24 --prune
+## Architecture
+
+### Process model
+
+One Uvicorn worker serves the static client at `/`, `/health`, the `/ws` command/snapshot channel and `POST /camera/frame`. All clients share one in-memory robot. Restarting the process resets state, counters and history and issues a new `instance_id`, which clients use to discard stale history. Multiple workers are not supported while state is process-local.
+
+### Concurrency
+
+- **Event loop.** Every engine operation and every broadcast runs under a single `asyncio.Lock`, so commands, camera observations and timer ticks are linearised. Each accepted change increments `revision` and broadcasts a complete snapshot; there are no partial updates.
+- **Timer.** A 250 ms `tick()` expires observations and advances thresholds. A snapshot is published only when visible state or live diagnostics change.
+- **Perception worker.** JPEG decoding and Face Landmarker inference run on one dedicated thread. There is exactly one in-flight frame across all clients and no queue: a second upload while busy gets `429`. A native job that exceeds its deadline keeps the slot until it returns, and its late result is discarded.
+- **Serial thread.** `SerialDisplay` owns the port on its own thread. The event loop only replaces a single "latest message" slot, so a slow or missing device can never block the server.
+- **Slow clients.** Each WebSocket send has a 2 s timeout; a client that cannot keep up is dropped rather than stalling the broadcast.
+
+### Ownership and lifecycle tokens
+
+- **Observation session.** Monitoring changes, power changes and source changes rotate `observation_session`. Producers must echo it with each observation; anything from an older session is rejected, so buffered or in-flight input cannot revive a paused robot.
+- **Camera session.** Only the tab that enabled the **Camera** source receives the private upload token (`camera_session`); other tabs observe without touching the webcam. Uploads carry a strictly increasing `X-Frame-Sequence`. Session and age are re-checked after inference before a result is published.
+- **Producer loss.** If the tab that was producing observations disconnects, its input and any active reminder are invalidated and the robot shows `bored`. A viewer disconnect does not affect another tab's source.
+- **Reminder identity.** Each real reminder gets an increasing `reminder.id` scoped to the backend instance. Clients and firmware speak a cue only when they see a new non-zero ID after their first snapshot, so reconnects and repeated snapshots never replay sound.
+
+## Reminder policy
+
+`ReminderEngine` maps a stream of timestamped presence observations to one of five behaviour states. It never sees images.
+
+### Observations
+
+| Presence | Produced by | Policy effect while powered on and monitoring |
+| --- | --- | --- |
+| `present` | A usable face, or simulated Present | `happy`; ends any departure, clears the reminder and logs `user_returned` with latency |
+| `uncertain` | No face, too dark/bright, blurred or invalid landmarks, or simulated Uncertain | `happy` at first; after `POMO_UNCERTAINTY_SECONDS` of continuous fresh uncertainty it becomes `absent`, backdated to when uncertainty began |
+| `absent` | Sustained uncertainty, or simulated Absent | `surprised`, then the reminder sequence below |
+| `unavailable` | No input yet, camera failure, owner disconnect, expired input, or simulated Unavailable | `bored`; clears pending absence and active reminders; never turns into `absent` |
+
+### Timeline of one departure (defaults)
+
+```text
+t = 0 s     face lost            uncertain → display happy           departure_detected (backdated)
+t = 1 s     uncertainty expires  absent    → display surprised
+t = 10 s    POMO_ABSENCE_SECONDS           → display sad (crying), reminder stage 1 spoken    reminder_triggered (first)
+t = 310 s   + POMO_REMINDER_REPEAT_SECONDS → reminder stage 2 spoken                          reminder_triggered (second)
+t = 610 s   + POMO_STANDBY_SECONDS         → display bored, no further reminders              standby_entered
+any time    present                        → display happy                                    user_returned (latency since latest reminder)
 ```
 
-Earlier setup records cover macOS ARM64 and the camera contributor’s WSL2 Linux x86-64 environment. See dated [verification records](docs/verification.md) for the integrated checks and remaining platform/browser limits.
+The absence clock starts when the face was first lost, not when uncertainty became `absent`, so `POMO_ABSENCE_SECONDS` is the true time from leaving to the first reminder. Repeat and standby are measured from the first reminder. Each departure produces at most two reminders. An optional `POMO_REMINDER_COOLDOWN_SECONDS` enforces a minimum gap between first reminders of separate departures; while it runs, the face stays `surprised`.
+
+Fresh input must continue throughout. If camera evidence becomes older than `POMO_OBSERVATION_MAX_AGE_SECONDS` (1 s) or any producer's input exceeds `POMO_OBSERVATION_TIMEOUT_SECONDS` (3 s), input becomes `unavailable` and the sequence ends. A single `absent` packet cannot sustain a reminder.
+
+### Expressions
+
+| Display | Shown when | Exits to |
+| --- | --- | --- |
+| `happy` | `present`, or `uncertain` shorter than the uncertainty period | `surprised` on absence; `bored` on pause/unavailable; `idle` on power off |
+| `surprised` | Away, first reminder not yet due (or cooldown running) | `sad` at the first reminder; `happy` on return |
+| `sad` | First or second reminder active (crying face) | `bored` at standby; `happy` on return |
+| `bored` | Monitoring paused, input unavailable, or standby | `happy` on fresh presence (including after standby) |
+| `idle` | Soft power off: monitoring, input, preview, reminders and cooldown cleared | Wake returns to `bored` with monitoring paused |
+
+### Control semantics
+
+- **Dismissal** (`dismiss_reminder` with the current ID) silences the active cue and hides its message but keeps the `sad` face; the second reminder and standby still follow on schedule. Stale or inactive IDs are rejected. Dismissal also extends any configured cooldown.
+- **Pause** and **power off** discard observations and reminders and rotate the session. Enabling monitoring without fresh input shows `bored`.
+- **Mute** is a shared preference (`POMO_SOUND_ENABLED` sets the initial value). It stops speech in progress on both the browser and the robot.
+- **Expression previews** (`preview_display`) override only the rendered face. They require power on, monitoring paused and development controls enabled, and never create reminders or sound.
+
+### Speech
+
+Reminder text lives in `REMINDER_MESSAGES` in `backend/policy.py` (stage 1: "I miss you. Please come back to your study when you're ready."; stage 2: "I'm still here. Come back to your study whenever you're ready."). When the robot is connected (`robot_display: connected`) the CoreS3 plays recorded clips of these sentences and the browser stays silent. Otherwise the browser uses the Web Speech API, falling back to a short tone. Browsers require one user gesture per tab ("Enable audio in this tab") before audio can play; visual reminders do not depend on it.
+
+## Perception pipeline
+
+```text
+JPEG bytes ─▶ size + header-dimension checks ─▶ OpenCV decode ─▶ brightness / Laplacian-blur gates
+          ─▶ MediaPipe Face Landmarker (VIDEO mode) ─▶ face box, head pose (yaw/pitch with hysteresis),
+             blendshapes, per-eye iris/blink diagnostics ─▶ CameraObservation(presence, reason, ...)
+```
+
+1. **Bounded ingestion.** The request body is streamed and rejected above `POMO_CAMERA_MAX_BYTES` (512 KiB). JPEG header dimensions are checked against `POMO_CAMERA_WIDTH`/`HEIGHT` before decoding, so oversized images never reach OpenCV.
+2. **Quality gates.** Grayscale mean outside `POMO_PERCEPTION_MIN/MAX_BRIGHTNESS` (35 to 230) or Laplacian variance below `POMO_PERCEPTION_MIN_BLUR_VARIANCE` (5) produces `uncertain` with reason `low_light`, `overexposed` or `low_detail_or_blur`.
+3. **Face Landmarker.** The versioned model (`models/face_landmarker.task`, URL and checksum in [models/README.md](models/README.md)) is loaded once. No face gives reason `no_face` (the normaliser turns it into `uncertain` first); unusable landmarks give `uncertain` with `invalid_landmarks`.
+4. **Diagnostics.** Head direction uses yaw/pitch thresholds (30 / 25 degrees) with a 5 degree exit margin to suppress flicker. Iris direction and blink scores are computed per eye and suppressed beyond 60 / 45 degrees of head rotation. These values are displayed for development only and never drive reminders.
+5. **Normalisation** (`Runtime._normalized_presence`). Stable presence for `POMO_RETURN_SECONDS` (0.5 s) arms a diagnostic baseline; brief tracking loss within `POMO_TRACKING_LOSS_GRACE_SECONDS` (1 s) is labelled as such; evidence older than `POMO_OBSERVATION_MAX_AGE_SECONDS` becomes `unavailable`. The result is passed to `engine.observe` with its capture timestamp.
+
+`camera_observation` in the snapshot carries the detailed diagnostics (reason, brightness, blur, box, pose, eyes, `frames_received`). Its `presence` always equals the policy `observation.presence`, so poor image quality that persists can legitimately lead to a reminder. That is a policy classification, not proof that the user left.
+
+Frames are processed in memory only. They are never logged, written to disk or included in test fixtures; the browser preview is mirrored locally while uploaded pixels are not.
+
+## Interfaces
+
+Full schemas, examples and recovery rules: [docs/protocol.md](docs/protocol.md) (**protocol version 10**). Backend, client, firmware, tests and that document must change together; older clients are incompatible.
+
+### HTTP and WebSocket
+
+| Endpoint | Method | Contract |
+| --- | --- | --- |
+| `/` | GET | Static control page and assets |
+| `/health` | GET | `{"status":"ok","phase":2,"protocol_version":10,"camera_processor_ready":bool}` |
+| `/ws` | WebSocket | JSON text commands (max 4,096 bytes) in; complete `state` snapshots and `error` messages out |
+| `/camera/frame` | POST | Raw JPEG, `Content-Type: image/jpeg`, `X-Camera-Session`, `X-Frame-Sequence` |
+
+### Commands
+
+Each command is a strict Pydantic model selected by `type`; unknown types, extra fields, wrong types, binary frames and oversized messages are rejected with an `error` message and never mutate state.
+
+| `type` | Fields | Constraints |
+| --- | --- | --- |
+| `set_input_source` | `source`: `camera` \| `robot` \| `simulated` | Power on, monitoring paused; `simulated` needs dev controls, `robot` needs `POMO_SERIAL_PORT` |
+| `set_monitoring` | `enabled` | Enabling needs power on (and a connected robot for `robot`) |
+| `set_power` | `enabled` | Soft power; off enters `idle` |
+| `set_muted` | `muted` | Shared preference |
+| `dismiss_reminder` | `reminder_id` (integer at least 1) | Must match the active reminder |
+| `submit_observation` | `presence`, `source`, `observed_at`, `session_id` | Simulated input, monitoring on, current session, strictly increasing timestamps, younger than the observation timeout and at most 1 s in the future |
+| `camera_failed` | none | Camera owner only |
+| `preview_display` / `clear_preview` | `display` / none | Dev controls, power on, monitoring paused |
+
+Booleans must be JSON booleans. Rejections reply `{"type":"error","code":"invalid_command","message":...}` to the sender only.
+
+```json
+{"type":"set_input_source","source":"simulated"}
+{"type":"set_monitoring","enabled":true}
+{"type":"submit_observation","presence":"absent","source":"simulated","observed_at":1764000000.25,"session_id":"<observation_session>"}
+{"type":"dismiss_reminder","reminder_id":3}
+```
+
+### Snapshot
+
+Every snapshot is complete: `protocol_version`, `instance_id`, `revision`, `behavior_state` (actual) and `display` (rendered, including previews), power/monitoring/mute, `input_source`, `observation` and `observation_session`, `absence_duration_seconds`, `cooldown_remaining_seconds`, `reminder` (`active`, `id`, `stage`, `message`), `standby`, `next_step_seconds`, `settings`, camera fields (`camera_session` for the owner only, `camera_capture_status`, `camera_observation`, `head_direction`, `frames_received`, ...), `robot_display` and the last 100 `events`.
+
+### Camera upload responses
+
+| Status | Meaning |
+| --- | --- |
+| 200 | `{"accepted":true,"sequence":n}` |
+| 400 | Invalid sequence, empty body or undecodable JPEG |
+| 408 | Body or processing deadline (`POMO_CAMERA_TIMEOUT_SECONDS`) exceeded |
+| 409 | Session expired, not owned, or stale sequence |
+| 413 | Body larger than `POMO_CAMERA_MAX_BYTES` |
+| 415 | Not `image/jpeg` |
+| 429 | Worker busy with another frame |
+| 503 | Perception worker unavailable |
+
+The browser uploads sequentially: the next frame is captured only after the previous response plus the frame interval, so `POMO_CAMERA_FPS` is an upper bound, not a guaranteed rate. Failed uploads are not retried.
+
+### Events
+
+The engine keeps the last 100 events in memory (and the page keeps up to 2,000 per instance; see [Control page](#control-page)). Every event is also written to the server log, which is the record used for study timing.
+
+| Group | Events |
+| --- | --- |
+| Study | `departure_detected`, `reminder_triggered`, `reminder_dismissed`, `reminder_cleared`, `user_returned`, `absence_interrupted`, `standby_entered` |
+| State | `state_changed`, `observation_changed`, `display_preview`, `monitoring_changed`, `power_changed`, `sound_changed` |
+| Input and connection | `input_source_changed`, `camera_started`, `camera_unavailable`, `observations_invalidated`, `client_connected`, `client_disconnected`, `command_rejected` |
+
+## Robot hardware
+
+The physical Pomo is an M5Stack CoreS3 running `firmware/robot-adapter`, connected to the laptop by USB. Set `POMO_SERIAL_PORT` (on macOS `ls /dev/cu.usbmodem*`; the TinyUSB device name contains the board serial number, so it is stable across USB sockets). Leave it empty to run without hardware.
+
+### Serial protocol
+
+Host to device, one JSON line whenever the relevant fields change, repeated every 2 s as a heartbeat:
+
+```json
+{"v":1,"display":"sad","reminder":3,"stage":1,"sound":true,"standby":false,"camera":false}
+```
+
+Device to host, binary camera frames while `camera` is true:
+
+```text
+"PJPG" | uint32 length (LE) | uint32 sequence (LE) | JPEG bytes      320x240, up to about 5 fps
+```
+
+`FrameParser` resynchronises on the `PJPG` magic, discards frames above `POMO_CAMERA_MAX_BYTES`, and drops frames that arrive while the worker is busy. Accepted frames go through `Runtime.robot_frame`, which reuses the `/camera/frame` checks and processor with input source `robot`. After each boot the device prints one line, `pomo-robot boot reset_reason=<n> camera=<0|1>`, which the backend logs.
+
+### Robustness
+
+- A missing or unplugged device is logged once as unavailable and reopened every 2 s; it never stops the server. `robot_display` in the snapshot reports `disabled`, `connected` or `unavailable`.
+- The firmware shows `bored` with "No link" after 6 s without a line, and treats the first message after a link starts as silent, so an old reminder is never replayed.
+- The device sends no commands; dismissal and other controls stay in the control page.
+
+### Firmware build notes
+
+- TinyUSB CDC (`ARDUINO_USB_MODE=0`) is used because the USB-Serial-JTAG driver in Arduino-ESP32 2.0.x loses bytes at camera data rates.
+- Uploads reset the board with a 1200-baud touch; `tools/after_upload.py` then restarts it into the new firmware. If the board is not found, hold reset for about 3 s (green LED) and upload again.
+- The camera takes over the internal I2C bus, so the speaker is started first and `M5.update()` (touch and power button polling) is not used.
+- Speech clips in `include/clips.h` (16 kHz mono) are generated from `REMINDER_MESSAGES` by `tools/make_clips.py`; a test fails if they are out of date.
+
+```sh
+cd firmware/robot-adapter && pio run -t upload           # build and flash
+conda run --name pomo python firmware/robot-adapter/tools/make_clips.py   # regenerate clips after changing reminder text
+```
+
+See [firmware/README.md](firmware/README.md) for details and the standalone `display-test/` and `camera-test/` sketches.
+
+## Control page
+
+The page at `/` renders backend state; it has no state machine of its own. Controls stay disabled until a valid snapshot arrives, the connection retries with capped exponential backoff, and a disconnect marks the display stale without queueing commands for replay. On desktop windows the page fits the window and each panel scrolls on its own.
+
+- **Robot panel.** The face, actual state, monitoring, power and mute controls, audio unlock and the active reminder with Dismiss.
+- **Controls panel.** Input source; camera preview with face box, capture/detection status and collapsed camera diagnostics (head pose, eyes, quality); simulated input buttons; expression previews; live observation, source, age, absence duration, cooldown, robot link, reminder stage and time to next step; current timing settings.
+- **Session log.** Backend events newest first in a Time / Level / Event / Message table. It shows summary counts (departures, first and second reminders, standby, returns) and the median return latency after a reminder; filters (Reminders, State, Input, Warnings) and text search; a Connection tab with this tab's connection journal; Export to a tab-separated file; and Clear view. History is merged by event ID across snapshots, up to 2,000 events per backend instance, beyond the backend's 100. Reloading the page or restarting the backend starts a new history, and Clear view affects only this tab.
+- **Layout splitter.** Drag the handle between the top panels and the log, or focus it and use Arrow, Page Up/Down, Home and End, to set the split. It is remembered in browser storage; double-click or Enter resets it.
+
+### Camera troubleshooting
+
+- Open the page at `http://127.0.0.1:8000` (or a validated HTTPS origin) and allow camera access for the site and, on macOS, in **System Settings > Privacy & Security > Camera**. In Chrome, **Settings > Privacy and security > Site settings > Camera** selects the physical camera.
+- Keep the tab visible while starting capture; hiding the tab stops capture. Use **Retry camera** after changing permissions, and close other apps using the camera.
+- `camera_processor_ready: true` in `/health` confirms the model loaded; `camera_started` confirms a capture request; only successful `/camera/frame` responses confirm frames are flowing. The message under the preview distinguishes capture, playback, encoding and upload errors.
+- When the backend runs in WSL, open the page in the host browser at `localhost`; capture always happens in the browser.
 
 ## Configuration
 
-The backend reads `.env` from the repository root. Process environment variables take precedence. Changes to startup settings require a backend restart; monitoring, power and mute controls are shared live.
+Settings come from `.env` in the repository root, overridden by process environment variables. Every value is validated at startup and an invalid value stops the server with a message. Booleans accept `true`/`false` in any case. Changes need a restart; monitoring, power and mute are live controls. `.env.example` lists every setting.
 
-| Variable | Default | Behaviour |
+### Server and reminders
+
+| Variable | Default | Meaning |
 | --- | --- | --- |
-| `POMO_HOST` | `127.0.0.1` | Uvicorn bind address |
-| `POMO_PORT` | `8000` | Shared HTTP/WebSocket port; accepts 1–65535 |
-| `POMO_DEV_CONTROLS` | `true` | Allows simulated observations and expression previews |
-| `POMO_UNCERTAINTY_SECONDS` | `1` | Continuous fresh uncertainty before it becomes absent |
-| `POMO_ABSENCE_SECONDS` | `10` | Time from leaving (first lost face) to the first spoken reminder; greater than 0, at most 3600 s, and at least the camera tracking-loss grace |
-| `POMO_REMINDER_REPEAT_SECONDS` | `300` | First reminder to second reminder while still away |
-| `POMO_STANDBY_SECONDS` | `600` | First reminder to standby (bored, no further reminders); must exceed the repeat interval |
-| `POMO_REMINDER_COOLDOWN_SECONDS` | `0` | Optional minimum gap between first reminders of separate departures; finite and non-negative |
-| `POMO_OBSERVATION_TIMEOUT_SECONDS` | `3` | Maximum observation age; finite and greater than zero |
-| `POMO_SOUND_ENABLED` | `true` | Initial shared sound preference; each browser still needs a user gesture for audio |
-| `POMO_SERIAL_PORT` | empty | CoreS3 USB serial device (on macOS `ls /dev/cu.usbmodem*`; with the current firmware the name contains the board's serial number); empty disables the robot |
-| `POMO_SERIAL_BAUDRATE` | `115200` | Serial speed; must match `firmware/robot-adapter` |
+| `POMO_HOST` | `127.0.0.1` | Bind address |
+| `POMO_PORT` | `8000` | HTTP/WebSocket port (1 to 65535) |
+| `POMO_DEV_CONTROLS` | `true` | Enables simulated input and expression previews |
+| `POMO_UNCERTAINTY_SECONDS` | `1` | Continuous fresh uncertainty before it counts as absent |
+| `POMO_ABSENCE_SECONDS` | `10` | Leaving to first reminder; greater than 0, at most 3600, at least the tracking-loss grace |
+| `POMO_REMINDER_REPEAT_SECONDS` | `300` | First to second reminder |
+| `POMO_STANDBY_SECONDS` | `600` | First reminder to standby; must exceed the repeat interval |
+| `POMO_REMINDER_COOLDOWN_SECONDS` | `0` | Minimum gap between first reminders of separate departures |
+| `POMO_OBSERVATION_TIMEOUT_SECONDS` | `3` | Maximum age of any observation accepted by the policy |
+| `POMO_SOUND_ENABLED` | `true` | Initial shared sound preference |
+| `POMO_SERIAL_PORT` | empty | CoreS3 serial device; empty disables the robot |
+| `POMO_SERIAL_BAUDRATE` | `115200` | Must match the firmware |
 
-Boolean settings accept `true` or `false`, case-insensitively. Invalid settings fail at startup.
+### Camera transport
 
-Example shell override for a short development demonstration of the whole sequence:
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `POMO_CAMERA_WIDTH` / `POMO_CAMERA_HEIGHT` | `640` / `480` | Capture target and maximum decoded size |
+| `POMO_CAMERA_FPS` | `10` | Upper sampling rate |
+| `POMO_CAMERA_JPEG_QUALITY` | `0.75` | Browser JPEG quality |
+| `POMO_CAMERA_MAX_BYTES` | `524288` | Maximum frame body (also applies to robot frames) |
+| `POMO_CAMERA_TIMEOUT_SECONDS` | `3` | Body/processing deadline and capture idle timeout |
+| `POMO_CAMERA_STARTUP_SECONDS` | `30` | Allowance for permission and first frame |
+| `POMO_CAMERA_MODEL_PATH` | `models/face_landmarker.task` | Model override |
+
+### Detection
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `POMO_TRACKING_LOSS_GRACE_SECONDS` | `1` | Brief face loss labelled as tracking loss (diagnostic) |
+| `POMO_RETURN_SECONDS` | `0.5` | Stable presence that arms the diagnostic baseline |
+| `POMO_OBSERVATION_MAX_AGE_SECONDS` | `1` | Maximum age or gap of usable camera evidence |
+| `POMO_PERCEPTION_DETECTION_CONFIDENCE` | `0.5` | MediaPipe detection threshold |
+| `POMO_PERCEPTION_PRESENCE_CONFIDENCE` | `0.5` | MediaPipe face-presence threshold |
+| `POMO_PERCEPTION_TRACKING_CONFIDENCE` | `0.5` | MediaPipe tracking threshold |
+| `POMO_PERCEPTION_MIN_BRIGHTNESS` / `MAX_BRIGHTNESS` | `35` / `230` | Usable grayscale mean range |
+| `POMO_PERCEPTION_MIN_BLUR_VARIANCE` | `5` | Minimum Laplacian variance; 0 disables |
+| `POMO_PERCEPTION_YAW_DEGREES` / `PITCH_DEGREES` | `30` / `25` | Head direction thresholds |
+| `POMO_PERCEPTION_HYSTERESIS_DEGREES` | `5` | Direction exit margin |
+
+Eye diagnostics (`POMO_PERCEPTION_EYE_*`): horizontal margin `0.15`, vertical offset threshold `0.08`, vertical signal threshold `0.30` and margin `0.10`, blink threshold `0.55`, full-closure coefficient `0.60`, maximum head yaw `60` and pitch `45` degrees. They affect displayed diagnostics only.
+
+Choose freshness limits above the expected frame interval plus inference latency; results older than the limit are `unavailable` even if frames are still arriving.
+
+## Testing and verification
 
 ```sh
-POMO_PORT=8001 POMO_ABSENCE_SECONDS=3 POMO_REMINDER_REPEAT_SECONDS=10 POMO_STANDBY_SECONDS=20 sh scripts/dev.sh
+conda run --name pomo python -m pytest -q                                  # 297 tests
+conda run --name pomo python -m pytest -q tests/test_policy.py             # one file
+conda run --name pomo python -m pip check                                  # after dependency changes
+node --test tests/test_simulator.js tests/test_simulator.cjs tests/test_camera_client.cjs   # 47 tests
+node --check simulator/app.js && node --check simulator/camera.js
+sh -n scripts/setup.sh scripts/dev.sh
 ```
 
-The browser's simulated input repeats at an interval below the configured freshness timeout. Real producers must also send continuing fresh observations. One absence packet cannot sustain a reminder indefinitely.
+| Suite | Covers |
+| --- | --- |
+| `test_policy.py` | Thresholds, backdated absence, repeat, standby, dismissal, cooldown, pause/power, freshness; fake clock, no sleeps |
+| `test_backend.py`, `test_expression_protocol.py` | Routes, strict commands, revisions, broadcasts, ownership, reconnection |
+| `test_camera.py`, `test_detection_integration.py`, `test_perception.py`, `test_eyes.py` | Frame validation, worker lifecycle, normalisation, perception gates (synthetic inputs via `camera_helpers.py`) |
+| `test_hardware.py` | Serial messages, frame parsing and resync, reconnect, robot frames, clip freshness (fake port) |
+| `test_config.py` | Environment parsing and validation |
+| `test_behaviour.py` | Legacy `backend/behaviour.py` regression only; not wired into the app |
+| Node suites | Control gating, reconnection, sound deduplication and fallback, camera client lifecycle, session log (history, filters, stats, export) via the fake DOM in `simulator_helpers.cjs` |
 
-### Camera configuration
+A known Starlette/HTTPX deprecation warning appears in the Python run and is documented; do not upgrade unrelated dependencies to hide it. Dated results and limits are recorded in [docs/verification.md](docs/verification.md).
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `POMO_CAMERA_WIDTH` / `POMO_CAMERA_HEIGHT` | 640 / 480 | Capture target and maximum decoded dimensions |
-| `POMO_CAMERA_FPS` | 10 | Upper sampling target; uploads are sequential |
-| `POMO_CAMERA_JPEG_QUALITY` | 0.75 | Browser JPEG encoding quality |
-| `POMO_CAMERA_MAX_BYTES` | 524288 | Maximum streamed request body |
-| `POMO_CAMERA_TIMEOUT_SECONDS` | 3 | Body/processing deadline and active-source idle timeout |
-| `POMO_CAMERA_STARTUP_SECONDS` | 30 | Initial permission/first-frame allowance |
-| `POMO_CAMERA_MODEL_PATH` | repository `models/face_landmarker.task` | Optional model override |
+### Manual check
 
-Values are validated at startup. Invalid or oversized images are rejected before
-state changes; JPEG dimensions are checked before OpenCV decoding. Only one upload
-is processed at a time; old frames are not queued or replayed.
+1. Start the backend and confirm **Connected**.
+2. Paused: select **Simulated**, enable monitoring (face is `bored` without input), then select **Absent**. Expect `surprised`, `sad` with speech at the absence threshold, a second reminder, then `bored` standby (use the short demo timings above).
+3. **Dismiss** stops the cue but keeps `sad`; **Present** returns to `happy` at any stage, even after standby.
+4. Pause and try each expression preview; none should speak or create reminders.
+5. Power off and wake; monitoring must remain paused.
+6. Open a second tab: state is shared and no sound is replayed. Close the producing tab: the robot shows `bored`.
+7. Repeat with **Camera** and **Robot camera**, leaving the frame for the absence threshold. With the robot, a dot in its top-right corner shows the camera is streaming.
 
-### Detection configuration
+## Deployment and security
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `POMO_TRACKING_LOSS_GRACE_SECONDS` | 1 | Duration used to distinguish tracking-loss diagnostics from possible absence |
-| `POMO_ABSENCE_SECONDS` | 5 | Shared threshold after qualifying fresh absence begins |
-| `POMO_RETURN_SECONDS` | 0.5 | Stable face presence needed to establish the camera diagnostic baseline |
-| `POMO_OBSERVATION_MAX_AGE_SECONDS` | 1 | Maximum age/gap of usable evidence |
-| `POMO_PERCEPTION_DETECTION_CONFIDENCE` | 0.5 | MediaPipe detection threshold |
-| `POMO_PERCEPTION_PRESENCE_CONFIDENCE` | 0.5 | MediaPipe face-presence threshold |
-| `POMO_PERCEPTION_TRACKING_CONFIDENCE` | 0.5 | MediaPipe tracking threshold |
-| `POMO_PERCEPTION_MIN_BRIGHTNESS` / `POMO_PERCEPTION_MAX_BRIGHTNESS` | 35 / 230 | Usable grayscale mean range |
-| `POMO_PERCEPTION_MIN_BLUR_VARIANCE` | 5 | Minimum Laplacian variance; below this is uncertain; 0 disables |
-| `POMO_PERCEPTION_YAW_DEGREES` / `POMO_PERCEPTION_PITCH_DEGREES` | 30 / 25 | Direction thresholds relative to the camera |
-| `POMO_PERCEPTION_HYSTERESIS_DEGREES` | 5 | Direction exit margin to reduce flicker |
+- The server has **no authentication**; any client that can reach it controls the shared robot. Bind to `127.0.0.1` (default) for laptop use.
+- For a cloud workspace, start with `POMO_HOST=0.0.0.0 sh scripts/dev.sh` and forward the port privately. The proxy must support WebSocket upgrades and serve at the URL root (no path prefix). Browser camera capture needs HTTPS outside `localhost`.
+- With a remote backend, camera frames travel over the network to it; the intended setup runs browser and backend on the same machine. Nothing is recorded.
+- Keep `.env`, credentials and any camera recordings out of version control.
 
-| Iris setting | Default | Purpose |
-| --- | --- | --- |
-| `POMO_PERCEPTION_EYE_HORIZONTAL_MARGIN` | 0.15 | Horizontal distance from eye midpoint before left/right |
-| `POMO_PERCEPTION_EYE_VERTICAL_OFFSET_THRESHOLD` | 0.08 | Signed iris displacement from eye-corner line, normalized by eye width |
-| `POMO_PERCEPTION_EYE_VERTICAL_SIGNAL_THRESHOLD` | 0.30 | Minimum model up/down coefficient to supplement iris geometry |
-| `POMO_PERCEPTION_EYE_VERTICAL_SIGNAL_MARGIN` | 0.10 | Minimum difference between opposing model up/down coefficients |
-| `POMO_PERCEPTION_EYE_BLINK_THRESHOLD` | 0.55 | Raw blink threshold for closed-eye classification |
-| `POMO_PERCEPTION_EYE_BLINK_FULL_CLOSURE` | 0.60 | Raw blink coefficient mapped continuously to displayed 1.00 |
-| `POMO_PERCEPTION_EYE_MAX_YAW_DEGREES` | 60 | Maximum absolute head yaw for iris interpretation |
-| `POMO_PERCEPTION_EYE_MAX_PITCH_DEGREES` | 45 | Maximum absolute head pitch for iris interpretation |
-
-Choose freshness limits above the expected upload interval plus processing latency.
-Processing results older than the observation limit are unavailable even when the
-camera transport remains available. All timing uses the backend's monotonic clock.
-
-
-## Observations, Expressions and Reminders
-
-An **observation** is the presence value currently used by the backend's reminder
-policy. It comes from the selected Camera (browser webcam), Robot camera (CoreS3) or Simulated input. An **expression** is
-the robot face selected by that policy; the same observation can produce different
-expressions depending on elapsed time, cooldown, monitoring and power. These values
-describe face presence and input quality, not whether someone is paying attention.
-
-### The four observations
-
-| Observation | When it occurs | Effect while powered on and monitoring |
-| --- | --- | --- |
-| `present` | The camera detects a usable face, or the Present simulation is selected. | Show `happy`; end the departure, clear the reminder sequence and log the return latency. |
-| `uncertain` | A fresh camera frame has no detected face, poor light, overexposure, blur or invalid face landmarks, or the Uncertain simulation is selected. A camera with no face produces this value even before a visible-face baseline has been established. | Show `happy` initially. If uncertainty continues with fresh input for **1 second by default**, change the policy observation to `absent`; the departure time is the start of that uncertainty. A `present` observation before then cancels it. |
-| `absent` | The Absent simulation is selected, or fresh `uncertain` input continues for the configured uncertainty period. The camera's initial no-face result goes through `uncertain` first. | Show `surprised`. **10 seconds after leaving** (default), show `sad` (crying) and speak the first reminder; **5 minutes later** speak a second reminder; **10 minutes after the first** enter standby (`bored`, no further reminders). |
-| `unavailable` | There is no current usable input: for example, monitoring has just started, the camera fails or disconnects, input expires, or the Unavailable simulation is selected. Observation is also reset to this value when monitoring is paused or power is turned off. | Show `bored` while monitoring is on; clear pending absence and any active reminder. Unavailable input does not turn into `absent` with time. Power off instead shows `idle`. |
-
-`POMO_UNCERTAINTY_SECONDS` controls the uncertain-to-absent delay (default 1 s).
-`POMO_ABSENCE_SECONDS` (default 10 s) is measured from the start of the departure,
-including that uncertainty; `POMO_REMINDER_REPEAT_SECONDS` and `POMO_STANDBY_SECONDS`
-are measured from the first reminder. Fresh input must continue throughout:
-if camera observations become stale (default 1 s), or simulated observations
-expire (default 3 s), input becomes unavailable and the timers reset. In the
-simulator, Present, Absent and Uncertain send repeated observations while selected;
-Unavailable sends a single unavailable observation.
-
-Camera diagnostics retain a reason such as `no_face` or `low_light`, but the
-displayed `camera_observation.presence` and policy `observation.presence` share
-the policy value. Consequently, an `absent` observation after sustained uncertainty
-is a policy classification, including when poor image quality caused the
-uncertainty; it is not proof that the user left.
-
-### The five expressions
-
-| Expression | When it is displayed | How it changes |
-| --- | --- | --- |
-| `happy` | Monitoring is on and the latest policy observation is `present`, or fresh `uncertain` has lasted less than the configured uncertainty period. | Changes to `surprised` when continuous uncertainty becomes `absent` or Absent is simulated; changes to `bored` on pause or unavailable input, or to `idle` on power off. |
-| `bored` | Pomo starts powered on with monitoring paused, monitoring is paused, monitoring is on but input is missing, expired or unavailable, or standby has begun after no return. Wake also returns here with monitoring paused. | Enabling monitoring alone leaves it `bored` until a usable observation arrives. Fresh `present` (including after standby) or initial `uncertain` changes it to `happy`; direct simulated `absent` changes it to `surprised`; power off changes it to `idle`. |
-| `surprised` | The user has just left: the policy observes `absent` and the first reminder is not yet due (or a configured cooldown is still running). | First reminder: `sad`. Presence or new uncertainty: `happy`. Unavailable input or pause: `bored`. Power off: `idle`. |
-| `sad` | Crying: the first or second reminder has been triggered and the user has not returned. Dismissal silences the cue but keeps this face. | Standby after `POMO_STANDBY_SECONDS`: `bored`. Presence or new uncertainty: `happy`. Unavailable input or pause: `bored`. Power off: `idle`. |
-| `idle` | Pomo is powered off through the soft power control. Monitoring, input, preview, active reminder and cooldown are cleared. | Wake returns to `bored` with monitoring paused; monitoring must then be enabled again. |
-
-For example, with default settings and continuing fresh camera frames, an initial
-no-face or poor-quality result shows **Uncertain / Happy**; after 1 second it
-becomes **Absent / Surprised**; 10 seconds after the face was lost it becomes
-**Absent / Sad** with the first spoken reminder; 5 minutes later the second
-reminder is spoken, and 10 minutes after the first Pomo enters **Bored** standby. Frame sampling and the backend
-timer can add a small delay. Present input at any stage returns to Happy; stale or
-unavailable input returns to Bored instead of sustaining the countdown.
-
-Pausing or changing monitoring discards old observations and requires fresh input.
-Returning presence, the start of uncertainty, unavailable input and pausing end the
-departure and its reminder sequence, but retain any configured cooldown.
-Power off is reversible and does not stop the server; a power cycle clears cooldown.
-
-A triggered reminder stays active until dismissed, presence returns, input becomes
-uncertain or unavailable, standby begins, monitoring pauses or power turns off.
-Dismissal silences the current cue; the second reminder and standby still follow on
-schedule. Each departure produces at most two reminders. The server log records
-`departure_detected`, `reminder_triggered`, `standby_entered` and `user_returned`
-(with seconds since the latest reminder) for study timing. Every real reminder has an increasing ID scoped to the backend instance, so stale
-dismissals and repeated snapshots cannot replay a previous cue.
-
-**Expression previews** are development controls available while Pomo is powered on
-and monitoring is paused. They temporarily override the displayed face without
-changing the actual policy state, activating a reminder or playing sound. Clear the
-preview, enable monitoring or change power to return to the actual state.
-
-Sound is on by default and can be muted. Enable audio through a user gesture in each tab. A newly received real reminder speaks its message once: through the CoreS3 speaker when the robot is connected, otherwise through browser speech synthesis (a short tone when speech is unavailable); initial/reconnect snapshots, preview expressions and repeated snapshots do not replay it. Browser audio restrictions or unsupported audio do not prevent visual reminders.
-
-## HTTP and WebSocket Interface
-
-| Endpoint | Transport | Contract |
-| --- | --- | --- |
-| `/` | HTTP GET | Simulator and same-origin static assets |
-| `/health` | HTTP GET | Service status, phase 2, protocol 9 and camera processor readiness |
-| `/ws` | WebSocket | Strict JSON commands, complete state snapshots and validation errors |
-| `/camera/frame` | HTTP POST | Bounded raw JPEG with private camera-session and increasing sequence headers |
-
-Protocol version 9 unifies camera and policy presence as `present`, `absent`, `uncertain` and `unavailable`. Both `camera_observation.presence` and `observation.presence` expose the same current value; camera diagnostics retain the reason separately. Update backend and simulator together; v8 and earlier clients are incompatible.
-
-Commands cover `set_input_source`, `camera_failed`, `set_monitoring`, `set_power`, `set_muted`, `dismiss_reminder`, `submit_observation`, `preview_display` and `clear_preview`. For example:
-
-```json
-{"type":"set_monitoring","enabled":true}
-{"type":"set_muted","muted":false}
-{"type":"dismiss_reminder","reminder_id":1}
-```
-
-Each snapshot includes actual `behavior_state`, rendered `display`, power/monitoring/mute state, camera/input metadata, observation-session token, absence duration, cooldown, active reminder, settings and up to 100 backend events. Manual previews require power on and monitoring paused; they change rendering only and never create reminders or sounds.
-
-Observation producers copy the latest session token, send strictly increasing finite Unix timestamps and discard buffered packets on lifecycle changes or disconnect. A source timeout invalidates the session. Unknown/binary/malformed messages and extra or incorrectly typed fields are rejected without applying a policy operation. Incoming message size is limited to 4,096 bytes. Full schemas, examples and recovery rules are in [protocol v10](docs/protocol.md).
-
-The simulator retries connections with capped exponential backoff and disables controls until a valid snapshot arrives. Disconnect stops simulated heartbeats and local audio. Reconnection restores current shared state but requires a fresh simulated-input selection; offline commands and old sounds are not replayed.
-
-## Verification
-
-Run the Python checks and package-consistency validation:
-
-```sh
-conda run --name pomo python -m pytest -q
-conda run --name pomo python -m pip check
-```
-
-Optional UI behaviour checks use Node.js's built-in test runner, with no npm dependencies:
-
-```sh
-node --test tests/test_simulator.js tests/test_simulator.cjs tests/test_camera_client.cjs
-node --check simulator/app.js
-node --check simulator/camera.js
-```
-
-Node is needed only for these JavaScript checks, not to run Pomo. The Python suites cover pure policy, WebSocket integration and configuration. The JavaScript suite checks simulated heartbeat lifecycle, control gating, sound deduplication/audio fallback, error handling and safe log rendering.
-
-The existing Starlette/HTTPX test-adapter deprecation warning remains. See [verification records](docs/verification.md) for dated results and material limits.
-
-Manual simulator demonstration:
-
-1. Start the backend, open the simulator and confirm Connected.
-2. While paused, select Simulated input, then enable monitoring. Without input the expression is Bored.
-3. Select Absent under simulated input. Continuing fresh observations show Surprised, then Sad with a spoken reminder after 10 seconds, a second reminder after 5 minutes and Bored standby 10 minutes after the first (shorten these with the environment overrides above).
-4. Dismiss it: the cue stops, the face stays Sad and the schedule continues. Select Present to return (Happy, even after standby); select Uncertain or Unavailable to stop detection-driven reminders.
-5. Enable audio through the button to allow speech for new reminders; mute stops in-flight speech.
-6. Pause monitoring, then preview all five expressions. Previews do not trigger real reminders or sound.
-7. Power off and wake Pomo. Verify wake leaves monitoring paused.
-8. Open a second tab and check shared state. Reconnect a viewer without replaying sound; disconnect the observation-producing tab and check the Bored expression.
-
-For the robot camera, start the backend with `POMO_SERIAL_PORT`, wait for Robot: Connected in the diagnostics, pause, select Robot camera and enable monitoring. A small dot in the robot's top-right corner shows the camera is streaming.
-
-For a browser camera demonstration, pause, select Camera, enable and grant permission. Leave a well-lit, sufficiently detailed scene for the uncertainty period plus absence threshold. Check the reminder sequence, dismissal and return. Test denied permission, owner-tab closure, hidden tabs and interruption; explicitly retry with a fresh session. Physical validation is still needed.
-
-The controls panel shows the current observation, source and age, absence duration, cooldown, reminder stage and time to the next step. The **Session log** across the bottom of the page shows backend events, newest first, with:
-
-- a summary of departures, first and second reminders, standby, returns and the median time to return after a reminder;
-- filters (Reminders, State, Input, Warnings) and text search;
-- a Connection tab for this tab's connection journal;
-- Export, which downloads the session as a tab-separated file.
-
-On desktop windows, drag the handle between the top panels and the log (or focus it and use the arrow, Page Up/Down, Home and End keys) to change how much height each gets. The split is remembered in that browser; double-click the handle or press Enter to reset it.
-
-The page keeps up to 2,000 events per backend run in that browser tab, beyond the backend's last 100; reloading the page or restarting the backend starts a new history. Clear view hides earlier entries in that tab only; it does not erase shared backend history.
-
-### No camera preview
-
-Open the app directly at `http://127.0.0.1:8000` or a validated HTTPS origin.
-Allow camera access for that site and for the browser in macOS **System Settings
-→ Privacy & Security → Camera**. In Chrome, **Settings → Privacy and security →
-Site settings → Camera** also lets you select the intended physical camera.
-See [Chrome camera permissions](https://support.google.com/chrome/answer/2693767)
-and [macOS camera access](https://support.apple.com/guide/mac-help/mchlf6d108da/mac).
-
-Keep the Pomo tab visible while starting capture. Switching tabs/apps can stop
-capture, including while permission is pending. Return to Pomo and use **Retry
-camera** after changing permissions or camera settings. Pause other camera apps
-if the browser reports that it cannot start the device.
-
-Read the message below the camera preview and the main feedback area. Capture,
-preview playback, frame encoding and upload errors have separate explanations;
-a preview-playback failure does not mean camera permission was denied. Include
-that exact message, browser and page address when reporting a failure.
-
-`camera_processor_ready: true` in `/health` confirms model initialization, while
-`camera_started` records a browser capture request. Neither confirms that browser
-video has started. Successful `POST /camera/frame` requests confirm frame delivery.
-Favicon, Apple touch icon and Chrome DevTools discovery 404s are unrelated to
-camera capture.
-
-## Deployment Constraints
-
-For a cloud development workspace, install Conda, run setup and start the server with:
-
-```sh
-POMO_HOST=0.0.0.0 sh scripts/dev.sh
-```
-
-Forward the configured port privately through the workspace provider. The proxy must support WebSocket upgrades and serve the application at the URL root; a path-prefix proxy is not configured. Forwarded HTTPS/WSS access requires validation in the target workspace.
-
-The development server has no authentication, and every connected client can control the shared robot. Keep access restricted through the workspace's access controls.
-
-Capture occurs in the browser and JPEG processing occurs in the backend. On remote deployments, frames travel to that backend. The intended laptop prototype runs both on localhost; no recording is implemented.
-
-## Repository Structure
+## Repository layout
 
 ```text
 backend/
-  app.py              FastAPI transport, strict commands, timer and broadcasts
-  policy.py           Camera-independent state/reminder policy and bounded events
-  config.py           Validated server, reminder, camera and perception configuration
-  camera.py           Dedicated JPEG/model worker
-  perception.py       Face Landmarker and head-direction observations
-  eyes.py             Experimental per-eye diagnostics
-  observations.py     Immutable raw camera observation schema
-  behaviour.py        Previous standalone camera policy, retained regression tests
-  hardware.py         Optional USB serial adapter for the CoreS3 robot face
-  __main__.py         Configuration loading and Uvicorn entry point
-simulator/
-  index.html          Robot display and simulator controls
-  app.js              WebSocket client, state/reminder rendering and reconnection
-  camera.js           Browser permission/capture, preview and sequential uploads
-  style.css           Responsive monochrome interface
+  __main__.py         Load config, start Uvicorn (single worker)
+  app.py              Runtime: commands, locking, tick, ownership, frame endpoint, snapshots
+  policy.py           ReminderEngine: states, timers, reminders, events, REMINDER_MESSAGES
+  config.py           Validated dataclasses from .env and environment
+  camera.py           FrameProcessor: JPEG checks, decode, dedicated worker
+  perception.py       Face Landmarker, quality gates, head pose with hysteresis
+  eyes.py             Iris and blink diagnostics
+  observations.py     Camera observation models
+  hardware.py         SerialDisplay and FrameParser for the CoreS3
+  behaviour.py        Legacy policy kept for historical tests
+simulator/            index.html, app.js (rendering, log, controls), camera.js (capture, uploads), style.css
 firmware/
-  README.md           Robot adapter, flashing and display-test notes
-  robot-adapter/      PlatformIO CoreS3 face driven by backend serial messages
-  display-test/       Standalone PlatformIO CoreS3 display test
-  camera-test/        Standalone PlatformIO CoreS3 camera preview
+  robot-adapter/      CoreS3 face, speech clips and camera streaming (PlatformIO)
+  display-test/       Standalone static face
+  camera-test/        Standalone camera preview
+models/               Face Landmarker model (downloaded) and its URL/checksum
+scripts/              setup.sh, dev.sh, setup_model.py
+tests/                pytest suites, Node suites and fake DOM/camera helpers
 docs/
-  protocol.md         Current WebSocket message contract
-  stack.md            Technology decisions
-  verification.md     Recorded checks and limitations
-scripts/
-  setup.sh            Create/update the pomo Conda environment
-  dev.sh              Start the backend inside that environment
-  setup_model.py      Checksum-verified model download
-tests/
-  test_backend.py     HTTP/WebSocket integration tests
-  test_policy.py      Fake-clock state/reminder policy tests
-  test_config.py      Environment validation tests
-  test_simulator.js   Optional dependency-free Node UI behaviour checks
-environment.yml       Conda runtime and pinned Python packages
-.env.example          Configuration defaults
+  protocol.md         Protocol v10: WebSocket, camera upload and serial contracts
+  stack.md            Technology choices
+  verification.md     Dated verification evidence and limits
+  agent-discussion.md Team and agent proposals, decisions and handoffs
+environment.yml       Conda definition with pinned pip packages
+.env.example          All settings with defaults
 ```
 
-## Team Discussion
+Dependencies (pinned in `environment.yml`): Python 3.13, FastAPI 0.162.0, Pydantic 2.14.1, Uvicorn 0.54.0, websockets 17.3, OpenCV contrib 5.0.0.93, MediaPipe 1.2.0, python-dotenv 1.2.4, pyserial, pytest 9.1.1, HTTPX 0.28.1. Rationale is in [docs/stack.md](docs/stack.md). Contributors and agents should read [AGENTS.md](AGENTS.md) and the relevant entries in [docs/agent-discussion.md](docs/agent-discussion.md) before changing shared contracts.
 
-Use [docs/agent-discussion.md](docs/agent-discussion.md) to exchange ideas, questions, decisions and handoffs between teammates and their agents. It includes a reusable entry template and Git sharing instructions. [AGENTS.md](AGENTS.md) directs agents to read relevant entries before working and append replies when there is something to share.
+## Project status
 
-Discussion updates are shared through commits and pull requests. Teammates must bring those changes into their checkout to see them.
+Specifications: [Reminders](https://app.notion.com/p/40a66acb0c0380f5bacfc18ac6fa598a), [States Implementation](https://app.notion.com/p/40a66acb0c0380deaf4fd7dbefb28b04), [Debug Logs](https://app.notion.com/p/40a66acb0c0380078ca4ef9dcfaed7e9), [Camera Detection](https://app.notion.com/p/40a66acb0c038013b8b5eb483fa9e18e).
 
-## TODO
+| Phase | Status |
+| --- | --- |
+| 1. Environment, transport, client | Done |
+| 2. Camera input, presence, policy, reminders | Done in software; physical detector evaluation pending |
+| Physical integration (CoreS3 face, speech, camera) | Implemented and run on the device; study-distance validation pending |
+| 3. Test and validate | Automated suites done; manual and field validation in progress |
 
-### Phase 2: Add Basic Functions
+### Remaining work
 
-- [x] Integrate browser webcam capture, start/stop lifecycle, preview, bounded uploads and availability/error reporting.
-- [x] Preserve the pinned OpenCV/MediaPipe detector, versioned model, presence and head-direction diagnostics.
-- [x] Add timestamp/session freshness validation and explicitly handle unknown, unavailable and expired observation metadata.
-- [ ] Evaluate the real detector under poor lighting and temporary tracking loss.
-- [x] Define the five backend states and configurable sustained-absence thresholds.
-- [x] Rename the five state and expression identifiers in protocol v8; the visual mapping and reminder rules are unchanged.
-- [x] Connect simulated/producer observation metadata to backend decisions and broadcast the resulting state.
-- [x] Adapt camera observations to the shared reminder contract with baseline, grace and freshness gates; physical webcam validation remains pending.
-- [x] Implement reminder dismissal, cooldown, global pause/resume, soft power and presence recovery.
-- [x] Add an optional sound cue with mute/audio-unlock controls and reconnect deduplication.
-- [x] Add simulated observation heartbeats, live duration/cooldown diagnostics and bounded reminder/error logs.
-- [x] Clear reminders on unavailable input and discard stale/old-session observations after interruptions; no camera recording is added.
+- [ ] Evaluate the detector under poor lighting, distance, head positions and temporary tracking loss; record false reminders and missed events.
+- [ ] Test missing/busy cameras, denied permission, resource release and recovery after interruption on real hardware.
+- [ ] Validate backend, client, camera and robot restart/disconnect sequences without replaying old reminders.
+- [ ] Complete an end-to-end real-camera and robot-camera demonstration: monitoring, absence, reminders, dismissal, standby and return.
+- [ ] Validate the robot at the study desk and distance, and record it in `docs/verification.md`.
+- [ ] Have teammates test installation and usability; validate Windows/Linux setup and HTTPS/WSS forwarding where used.
 
-### Phase 3: Test and Validate
+### Deferred
 
-- [ ] Test missing/busy cameras, denied permission, resource release and recovery after interruption.
-- [ ] Evaluate leaving the frame, looking away and reading notes across lighting conditions, distances and head positions; record false reminders and missed events.
-- [x] Add camera-independent tests for thresholds, cooldown, dismissal, pause/resume, power, freshness and unavailable input.
-- [ ] Validate backend, simulator and camera restart/disconnection sequences without replaying old reminders.
-- [ ] Complete the manual browser/audible check and a real-camera demonstration of monitoring → observations → absence → reminder → dismissal → recovery.
-- [x] Add automated coverage of the simulated observation and reminder pipeline.
-- [ ] Have teammates test installation and usability; record whether controls and reminder frequency are understandable and acceptable.
-- [ ] Validate Windows/Linux setup and private HTTPS/WSS forwarding where those environments are used.
-- [ ] Record a short demo, configuration instructions, detection limitations and validation results; review and merge working changes into `main`.
-
-### Physical Integration and Deferred Features
-
-- [ ] Define and validate the physical display, button interface and hardware transport against the documented backend contract.
-- [ ] Document the hardware adapter and end-to-end integration steps after the software prototype is validated.
-- [ ] Revisit Pomodoro/session controls and voice recognition after the prototype scope is complete.
+Pomodoro and session controls, voice recognition, physical buttons for dismissal, richer expressions and health reminders.
