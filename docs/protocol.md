@@ -407,7 +407,7 @@ Events include an increasing integer `id`, UTC ISO-8601 `at`, `level` (`info`, `
 
 For user-study timing, the server log also records `departure_detected` (with the backdated departure time), `reminder_triggered` (with first/second stage and time away), `standby_entered`, `user_returned` (seconds since the latest reminder and total time away) and `absence_interrupted` (input lost, paused or powered off during a departure).
 
-The backend keeps only the latest 100 events in memory and writes event summaries through Python logging. The simulator displays the bounded backend log separately from its local connection journal. Clearing the browser log hides existing entries in that tab; it does not delete shared backend history.
+The backend keeps only the latest 100 events in memory and writes event summaries through Python logging. The page's Session log keeps up to 2,000 events per `instance_id` in that tab (merged by event `id` from successive snapshots), separately from its local connection journal, and can export them as a tab-separated file. Clearing the view hides existing entries in that tab; it does not delete shared backend history.
 
 Rejected commands return:
 

@@ -194,3 +194,52 @@ test("robot camera input hides the browser preview and never starts browser capt
   assert.equal(b.elements["detection-status"].textContent, "Waiting for robot camera frames");
   assert.equal(b.cameras.at(-1).session, null, "the browser camera stays off");
 });
+
+test("the session log keeps history beyond the backend window, filters, searches and summarises", () => {
+  const b = browser();
+  const socket = b.sockets[0];
+  const at = "2026-11-24T10:00:00Z";
+  const event = (id, kind, message, level = "info") => ({id, at, level, kind, message});
+  const first = [
+    event(1, "departure_detected", "camera: user away since 10:00"),
+    event(2, "reminder_triggered", "Reminder 1 (first) after 10.0s away"),
+    event(3, "user_returned", "User returned 4.0s after reminder 1 (first); away 14.0s"),
+    event(4, "observations_invalidated", "Camera input timed out or disconnected.", "warning")
+  ];
+  socket.receive(snapshot({events: first}));
+  // The next snapshot no longer carries the oldest events; the page keeps them.
+  socket.receive(snapshot({revision: 1, events: [
+    event(5, "departure_detected", "camera: user away since 10:05"),
+    event(6, "reminder_triggered", "Reminder 2 (first) after 10.0s away"),
+    event(7, "reminder_triggered", "Reminder 3 (second) after 310.0s away"),
+    event(8, "user_returned", "User returned 6.0s after reminder 3 (second); away 316.0s")
+  ]}));
+  assert.equal(b.elements.events.children.length, 8);
+  assert.ok(b.elements.events.children[0].textContent.includes("User returned 6.0s"), "newest first");
+  assert.equal(b.elements["log-count"].textContent, "8 events");
+  assert.equal(b.elements["stat-departures"].textContent, "2");
+  assert.equal(b.elements["stat-first"].textContent, "2");
+  assert.equal(b.elements["stat-second"].textContent, "1");
+  assert.equal(b.elements["stat-returns"].textContent, "2");
+  assert.equal(b.elements["stat-latency"].textContent, "5.0 s");
+  b.click(b.filters.find((button) => button.dataset.filter === "warnings"));
+  assert.equal(b.elements.events.children.length, 1);
+  assert.equal(b.elements.events.children[0].dataset.level, "warning");
+  assert.equal(b.elements["log-count"].textContent, "1 of 8 events");
+  b.click(b.filters.find((button) => button.dataset.filter === "all"));
+  b.elements["log-search"].value = "SECOND";
+  b.elements["log-search"].oninput();
+  assert.equal(b.elements.events.children.length, 2);
+  b.elements["log-search"].value = "";
+  b.elements["log-search"].oninput();
+  b.click("tab-journal");
+  assert.equal(b.elements["journal-view"].hidden, false);
+  assert.equal(b.elements["events-view"].hidden, true);
+  assert.equal(b.elements["log-filters"].hidden, true);
+  b.click("clear");
+  assert.equal(b.elements.events.children.length, 0);
+  assert.equal(b.elements["stat-departures"].textContent, "0");
+  assert.equal(b.elements["export-log"].disabled, true);
+  socket.receive(snapshot({revision: 2, instance_id: "server-b", events: [event(1, "client_connected", "Client connected.")]}));
+  assert.equal(b.elements.events.children.length, 1, "a backend restart starts a fresh history");
+});

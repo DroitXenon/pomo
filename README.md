@@ -352,7 +352,16 @@ For the robot camera, start the backend with `POMO_SERIAL_PORT`, wait for Robot:
 
 For a browser camera demonstration, pause, select Camera, enable and grant permission. Leave a well-lit, sufficiently detailed scene for the uncertainty period plus absence threshold. Check the reminder sequence, dismissal and return. Test denied permission, owner-tab closure, hidden tabs and interruption; explicitly retry with a fresh session. Physical validation is still needed.
 
-The debug panel shows current observation/source/age, absence duration, cooldown, reminder stage, time to the next step, actual state and backend events. Clearing the browser log clears that tab's view only; it does not erase shared backend history.
+The controls panel shows the current observation, source and age, absence duration, cooldown, reminder stage and time to the next step. The **Session log** across the bottom of the page shows backend events, newest first, with:
+
+- a summary of departures, first and second reminders, standby, returns and the median time to return after a reminder;
+- filters (Reminders, State, Input, Warnings) and text search;
+- a Connection tab for this tab's connection journal;
+- Export, which downloads the session as a tab-separated file.
+
+On desktop windows, drag the handle between the top panels and the log (or focus it and use the arrow, Page Up/Down, Home and End keys) to change how much height each gets. The split is remembered in that browser; double-click the handle or press Enter to reset it.
+
+The page keeps up to 2,000 events per backend run in that browser tab, beyond the backend's last 100; reloading the page or restarting the backend starts a new history. Clear view hides earlier entries in that tab only; it does not erase shared backend history.
 
 ### No camera preview
 

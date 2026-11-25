@@ -10,7 +10,7 @@
 body { margin: 0; }
 
 header {
-  max-width: 1000px;
+  max-width: 1648px;
   margin: auto;
   padding: 20px 24px;
   display: flex;
@@ -21,11 +21,48 @@ header {
 }
 
 .app-heading { display: flex; align-items: center; gap: 18px; }
-.app-heading h1 { margin: 0; font-size: 15px; font-weight: 500; color: #a3a3a3; }
-.brand { font-size: 28px; letter-spacing: -2px; font-weight: 800; color: inherit; text-decoration: none; }
+.brand { display: flex; align-items: baseline; font-size: 28px; letter-spacing: -2px; font-weight: 800; color: inherit; text-decoration: none; }
+.brand h1 { margin: 0; font: inherit; }
 .brand span { font-size: 11px; color: #f5f5f5; margin-left: 4px; }
-main { max-width: 1000px; margin: auto; padding: 28px 24px; }
-.workspace { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+main { max-width: 1648px; margin: auto; padding: 28px 24px; }
+/* Fixed-height top row: a narrow robot panel and a wide two-column controls
+   panel. Either panel scrolls inside if its content is taller (for example
+   while a reminder is shown), so the session log never moves down. */
+.workspace { display: grid; grid-template-columns: minmax(420px, 0.62fr) minmax(0, 1.38fr); grid-template-rows: 400px; gap: 20px; }
+.robot-panel, .controls-panel { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.controls-panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 28px; align-items: start; padding: 20px 24px; }
+.robot-panel { padding: 20px 24px; }
+.robot-panel .robot { margin-top: 18px; }
+.robot-panel .robot-actions > button { min-height: 40px; padding: 10px 16px; }
+.robot-panel .sound-controls { align-items: center; gap: 4px 10px; }
+.robot-panel #audio-status { margin: 0; }
+.robot-panel #state-title { margin: 10px 0 8px; }
+.robot-panel #sound { font-size: 13px; }
+.robot-panel #monitor-status { margin-top: 6px; }
+.robot-panel .sound-controls { margin-top: 6px; }
+.robot-panel .sound-controls button { padding: 4px 6px; }
+.controls-panel .inputs[aria-label="Input source"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.controls-panel .inputs button { padding: 9px 10px; }
+.controls-panel #source-status { margin: 8px 0 12px; }
+.controls-panel .observations { margin-top: 0; }
+.controls-panel .observations > div { padding: 6px 0; }
+.controls-panel .diagnostics { margin-top: 12px; padding-top: 10px; }
+/* Small 4:3 preview beside its status lines; the face overlay stays aligned. */
+.controls-panel .camera-panel { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 0 14px; align-items: start; padding-bottom: 0; }
+.controls-panel .camera-panel > .camera-view, .controls-panel .camera-panel > .camera-text { grid-row: 1; }
+.controls-panel .camera-panel > .diagnostics { grid-column: 1 / -1; }
+.controls-panel .camera-panel:has(> .camera-view[hidden]) { grid-template-columns: minmax(0, 1fr); }
+.controls-panel .camera-text .small { margin: 0 0 8px; }
+.controls-panel .camera-panel { margin-bottom: 0; border-bottom: 0; }
+.controls-panel #simulation-panel h2 { margin: 4px 0 10px; }
+.controls-panel #simulation-panel .small { margin: 8px 0 0; }
+
+.controls-panel #policy-settings { margin: 10px 0 0; }
+
+@media (max-width: 1100px) {
+  .controls-panel { grid-template-columns: minmax(0, 1fr); }
+  .controls-column + .controls-column { margin-top: 16px; }
+}
 .robot-panel, .controls-panel { border: 1px solid #303030; border-radius: 16px; padding: 24px; background: #181818; }
 .robot-panel { text-align: center; background: #111111; }
 
@@ -80,12 +117,10 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .diagnostics summary { font-size: 12px; color: #a3a3a3; cursor: pointer; }
 .detail-row { display: flex; justify-content: space-between; gap: 12px; padding: 16px 0 0; font-size: 12px; color: #a3a3a3; }
 .detail-row strong { font-weight: 500; color: #e5e5e5; }
-.log-heading { display: flex; align-items: center; justify-content: space-between; }
-.log-heading h3 { font-size: 12px; font-weight: 500; margin: 20px 0 12px; }
 .text-button { border: 0; padding: 6px; font-size: 12px; color: #a3a3a3; background: transparent; }
-.journal { height: 132px; overflow: auto; overflow-wrap: anywhere; background: #0c0c0c; border-radius: 8px; padding: 12px; list-style: none; margin: 0; font: 11px/1.9 ui-monospace, monospace; color: #a3a3a3; }
 
 [hidden] { display: none !important; }
+.layout-splitter { display: none; }
 .robot-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 .robot-actions > button { min-height: 44px; }
 .screen[data-display="idle"] .eyes,
@@ -104,7 +139,6 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .observations > div { display: flex; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid #303030; }
 .observations dt { color: #a3a3a3; }
 .observations dd { margin: 0; font-variant-numeric: tabular-nums; text-align: right; }
-.log-title { margin: 18px 0 10px; font-size: 12px; font-weight: 500; }
 .primary:not(:disabled):hover { background: #d4d4d4; }
 .text-button:not(:disabled):hover { color: #ffffff; text-decoration: underline; }
 #policy-settings { font-variant-numeric: tabular-nums; }
@@ -112,9 +146,9 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 @media (max-width: 700px) {
   header { padding: 16px; gap: 12px; }
   .app-heading { gap: 12px; }
-  .app-heading h1 { font-size: 14px; }
   main { padding: 20px 16px; }
-  .workspace { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; gap: 16px; }
+  .robot-panel, .controls-panel { overflow-y: visible; }
   .robot-panel, .controls-panel { padding: 20px; }
 }
 
@@ -134,4 +168,88 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 @media (max-width: 400px) {
   .detail-row { flex-wrap: wrap; }
   .camera-panel .detail-row strong { max-width: 100%; }
+}
+
+/* Session log: full-width panel below the robot and controls. */
+.log-panel { margin-top: 20px; border: 1px solid #303030; border-radius: 16px; background: #141414; padding: 20px 24px 24px; }
+.log-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; }
+.log-title-group { display: flex; align-items: baseline; gap: 12px; }
+.log-title-group h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.log-title-group .small { font-variant-numeric: tabular-nums; }
+.log-meta { display: flex; align-items: baseline; gap: 6px; margin-right: auto; }
+.log-meta strong { font-weight: 500; color: #e5e5e5; font-variant-numeric: tabular-nums; }
+.log-actions { display: flex; gap: 4px; }
+.log-stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin: 18px 0 0; }
+.log-stats > div { border: 1px solid #2a2a2a; border-radius: 10px; padding: 12px 14px; background: #101010; min-width: 0; }
+.log-stats dt { font-size: 11px; color: #8a8a8a; line-height: 1.4; }
+.log-stats dd { margin: 6px 0 0; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; color: #f5f5f5; }
+.log-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 18px 0 12px; }
+.log-tabs { display: flex; gap: 2px; padding: 3px; border: 1px solid #303030; border-radius: 10px; background: #0c0c0c; }
+.log-tabs button { border: 0; border-radius: 7px; padding: 7px 12px; font-size: 12px; background: transparent; color: #a3a3a3; }
+.log-tabs button[aria-selected="true"] { background: #2a2a2a; color: #f5f5f5; }
+.log-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.log-filters button { padding: 6px 11px; font-size: 12px; border-radius: 999px; color: #a3a3a3; }
+.log-filters button[aria-pressed="true"] { background: #f5f5f5; color: #111; border-color: #f5f5f5; }
+.log-filters button:not([aria-pressed="true"]):hover { border-color: #737373; color: #f5f5f5; }
+#log-search { margin-left: auto; min-width: 200px; flex: 0 1 260px; font: inherit; font-size: 12px; padding: 8px 12px; color: #f5f5f5; background: #0c0c0c; border: 1px solid #404040; border-radius: 9px; }
+#log-search:focus-visible { outline: 3px solid #ffffff; outline-offset: 2px; }
+.log-columns, .log-list li { display: grid; grid-template-columns: 76px 64px minmax(120px, 190px) minmax(0, 1fr); gap: 12px; }
+.log-columns { padding: 0 14px 8px; font-size: 11px; color: #737373; text-transform: uppercase; letter-spacing: .06em; }
+.log-list { height: clamp(260px, 42vh, 560px); resize: vertical; overflow: auto; margin: 0; padding: 4px 0; list-style: none; background: #0c0c0c; border: 1px solid #262626; border-radius: 10px; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: #c4c4c4; }
+.log-list li { padding: 4px 14px; border-left: 2px solid transparent; }
+.log-list li:nth-child(even) { background: #111111; }
+.log-list li:hover { background: #1c1c1c; }
+.log-time { color: #737373; font-variant-numeric: tabular-nums; }
+.log-level { color: #737373; }
+.log-kind { color: #e5e5e5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-message { overflow-wrap: anywhere; }
+.log-list li[data-level="warning"] { border-left-color: #a3a3a3; }
+.log-list li[data-level="warning"] .log-level { color: #e5e5e5; }
+.log-list li[data-level="error"] { border-left-color: #ffffff; background: #222222; }
+.log-list li[data-level="error"] .log-level, .log-list li[data-level="error"] .log-message { color: #ffffff; font-weight: 600; }
+.journal-list li { display: block; color: #a3a3a3; }
+.log-list:empty::before { content: "No events to show"; display: block; padding: 18px 14px; color: #595959; }
+
+@media (max-width: 900px) {
+  .log-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 700px) {
+  .log-panel { padding: 18px 16px 20px; margin-top: 16px; }
+  .log-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #log-search { margin-left: 0; flex: 1 1 100%; min-width: 0; }
+  .log-columns { display: none; }
+  .log-list li { grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; }
+  .log-list .log-level { display: none; }
+  .log-list .log-message { grid-column: 1 / -1; color: #a3a3a3; }
+}
+
+/* Desktop: the whole page fits the window. The top row is short, the log takes
+   the remaining height, and each panel scrolls inside instead of the page. */
+@media (min-width: 701px) and (min-height: 600px) {
+  body { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+  header { flex: none; width: 100%; padding-top: 12px; padding-bottom: 12px; }
+  main { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: column; padding-top: 16px; padding-bottom: 16px; }
+  .workspace { flex: none; grid-template-columns: minmax(480px, 0.75fr) minmax(0, 1.25fr); grid-template-rows: clamp(280px, 36vh, 360px); }
+  /* Face on the left, state and controls beside it, so the short panel needs no scrolling. */
+  .robot-panel { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 24px; align-content: center; align-items: center; }
+  .robot-panel > * { grid-column: 2; }
+  .robot-panel > .robot { grid-column: 1; grid-row: 1 / span 9; margin: 18px 0 0; }
+  .robot-panel #state-title { margin: 0 0 10px; }
+  .log-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; margin-top: 0; padding-top: 16px; padding-bottom: 16px; }
+  /* Drag handle between the top panels and the log; its label shows the split. */
+  .layout-splitter { flex: none; display: flex; align-items: center; justify-content: center; position: relative; height: 18px; margin: 1px 0; cursor: row-resize; touch-action: none; border-radius: 6px; }
+  .layout-splitter::before { content: ""; width: 48px; height: 4px; border-radius: 2px; background: #404040; transition: background .15s, width .15s; }
+  .layout-splitter:hover::before, .layout-splitter[data-dragging="true"]::before { background: #d4d4d4; width: 72px; }
+  .layout-splitter:focus-visible { outline: 3px solid #ffffff; outline-offset: -3px; }
+  .layout-split-label { position: absolute; left: calc(50% + 48px); font-size: 11px; color: #a3a3a3; font-variant-numeric: tabular-nums; white-space: nowrap; opacity: 0; transition: opacity .15s; pointer-events: none; }
+  .layout-splitter:hover .layout-split-label, .layout-splitter:focus-visible .layout-split-label,
+  .layout-splitter[data-dragging="true"] .layout-split-label { opacity: 1; }
+  body[data-resizing="true"] { cursor: row-resize; user-select: none; }
+  .log-stats { margin-top: 12px; }
+  .log-stats > div { padding: 8px 12px; }
+  .log-stats dd { font-size: 18px; margin-top: 2px; }
+  .log-controls { margin: 12px 0 8px; }
+  #events-view, #journal-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  #events-view[hidden], #journal-view[hidden] { display: none; }
+  .log-list { flex: 1; min-height: 80px; height: auto; resize: none; }
 }

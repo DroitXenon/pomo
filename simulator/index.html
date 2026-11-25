@@ -2,23 +2,24 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pomo · Simulator</title>
-  <link rel="stylesheet" href="style.css?v=10"><script src="camera.js?v=4" defer></script><script src="app.js?v=19" defer></script>
+  <title>Pomo</title>
+  <link rel="stylesheet" href="style.css?v=21"><script src="camera.js?v=5" defer></script><script src="app.js?v=24" defer></script>
 </head>
 <body>
   <header>
-    <div class="app-heading"><a class="brand" href="./">pomo<span aria-hidden="true">●</span></a><h1>Simulator</h1></div>
+    <div class="app-heading"><a class="brand" href="./"><h1>pomo</h1><span aria-hidden="true">●</span></a></div>
     <span class="dot-label" id="connection" role="status">Connecting</span>
   </header>
   <main>
-    <div class="workspace">
-      <section class="robot-panel" aria-label="Simulated robot">
+    <div id="workspace" class="workspace">
+      <section class="robot-panel" aria-label="Robot">
         <div class="robot" aria-hidden="true"><div class="antenna"></div><div class="screen" id="screen" data-display="bored"><div class="eyes"><i></i><i></i></div><div class="mouth"></div><span class="cheek left"></span><span class="cheek right"></span></div><div class="robot-name">pomo</div></div>
         <h2 id="state-title" aria-live="polite">Connecting…</h2>
         <p id="preview-status" class="small" hidden></p>
         <div class="robot-actions">
           <button id="monitor" class="primary" disabled>Enable monitoring</button>
           <button id="power" disabled>Power off</button>
+          <button id="sound" aria-pressed="true" disabled>Unmute sound</button>
         </div>
         <p id="monitor-status" class="small">Monitoring status unknown</p>
         <section id="reminder-panel" class="reminder-panel" aria-label="Reminder" aria-live="polite" hidden>
@@ -26,13 +27,13 @@
           <button id="dismiss" class="primary" disabled>Dismiss reminder</button>
         </section>
         <div class="sound-controls">
-          <button id="sound" class="text-button" aria-pressed="true" disabled>Unmute sound</button>
           <button id="audio-unlock" class="text-button" hidden>Enable audio in this tab</button>
+          <p id="audio-status" class="small">Sound muted</p>
         </div>
-        <p id="audio-status" class="small">Sound muted</p>
         <p id="feedback" role="status" class="feedback"></p>
       </section>
-      <aside class="controls-panel" aria-label="Simulator controls">
+      <aside class="controls-panel" aria-label="Controls">
+        <div class="controls-column">
         <h2>Input source</h2>
         <div class="inputs" role="group" aria-label="Input source">
           <button data-source="camera" disabled>Camera</button>
@@ -45,9 +46,11 @@
             <video id="camera-preview" autoplay muted playsinline aria-label="Live camera preview"></video>
             <canvas id="face-overlay" width="640" height="480" aria-hidden="true"></canvas>
           </div>
-          <p id="camera-status" class="small" role="status">Camera paused</p>
-          <p id="detection-status" class="small" role="status">Detection paused</p>
-          <button id="retry-camera" hidden disabled>Retry camera</button>
+          <div class="camera-text">
+            <p id="camera-status" class="small" role="status">Camera paused</p>
+            <p id="detection-status" class="small" role="status">Detection paused</p>
+            <button id="retry-camera" hidden disabled>Retry camera</button>
+          </div>
           <details class="diagnostics">
             <summary>Camera diagnostics</summary>
             <div class="detail-row"><span>Face</span><strong id="face-presence">Unavailable</strong></div>
@@ -75,18 +78,6 @@
           <p id="simulation-status" class="small">Enable monitoring, then select an input.</p>
           <p class="small">Development input only. Simulated observations do not open a camera.</p>
         </section>
-        <dl class="observations">
-          <div><dt>Observation</dt><dd id="observation-current">—</dd></div>
-          <div><dt>Source</dt><dd id="observation-source">—</dd></div>
-          <div><dt>Detection input</dt><dd id="input-status">—</dd></div>
-          <div><dt>Absence duration</dt><dd id="absence-duration">—</dd></div>
-          <div><dt>Cooldown left</dt><dd id="cooldown-status">—</dd></div>
-          <div><dt>Robot</dt><dd id="robot-display">—</dd></div>
-          <div><dt>Reminder stage</dt><dd id="reminder-stage">—</dd></div>
-          <div><dt>Next step in</dt><dd id="next-step">—</dd></div>
-          <div><dt>Observation age</dt><dd id="observation-age">—</dd></div>
-        </dl>
-        <p id="policy-settings" class="small"></p>
         <details class="diagnostics">
           <summary>Expression previews</summary>
           <p id="previews-status" class="small">Pause monitoring to preview expressions.</p>
@@ -99,17 +90,68 @@
             <button id="clear-preview" disabled>Clear preview</button>
           </div>
         </details>
-        <details class="diagnostics">
-          <summary>Debug logs</summary>
-          <div class="detail-row"><span>Actual state</span><strong id="behavior-state">—</strong></div>
-          <div class="detail-row"><span>State revision</span><strong id="revision">—</strong></div>
-          <div class="log-heading"><h3>Backend events</h3><button id="clear" class="text-button">Clear view</button></div>
-          <ol id="events" class="journal" aria-label="Backend events"></ol>
-          <h3 class="log-title">Connection journal</h3>
-          <ol id="journal" class="journal" aria-label="Recent connection events"></ol>
-        </details>
+        </div>
+        <div class="controls-column">
+        <dl class="observations">
+          <div><dt>Observation</dt><dd id="observation-current">—</dd></div>
+          <div><dt>Source</dt><dd id="observation-source">—</dd></div>
+          <div><dt>Detection input</dt><dd id="input-status">—</dd></div>
+          <div><dt>Absence duration</dt><dd id="absence-duration">—</dd></div>
+          <div><dt>Cooldown left</dt><dd id="cooldown-status">—</dd></div>
+          <div><dt>Robot</dt><dd id="robot-display">—</dd></div>
+          <div><dt>Reminder stage</dt><dd id="reminder-stage">—</dd></div>
+          <div><dt>Next step in</dt><dd id="next-step">—</dd></div>
+          <div><dt>Observation age</dt><dd id="observation-age">—</dd></div>
+        </dl>
+        <p id="policy-settings" class="small"></p>
+        </div>
       </aside>
     </div>
+    <div id="layout-splitter" class="layout-splitter" role="separator" tabindex="0" aria-orientation="horizontal"
+      aria-controls="workspace" aria-label="Resize panels" aria-valuemin="15" aria-valuemax="80" aria-valuenow="36"
+      title="Drag to resize · double-click to reset"><span id="layout-split-label" class="layout-split-label">Top 36% · Log 64%</span></div>
+    <section class="log-panel" aria-labelledby="log-heading">
+      <div class="log-toolbar">
+        <div class="log-title-group">
+          <h2 id="log-heading">Session log</h2>
+          <span id="log-count" class="small" aria-live="polite">No events</span>
+        </div>
+        <div class="log-meta small">State <strong id="behavior-state">—</strong><span aria-hidden="true">·</span>Revision <strong id="revision">—</strong></div>
+        <div class="log-actions">
+          <button id="export-log" class="text-button" disabled>Export</button>
+          <button id="clear" class="text-button">Clear view</button>
+        </div>
+      </div>
+      <dl class="log-stats" aria-label="Session summary">
+        <div><dt>Departures</dt><dd id="stat-departures">0</dd></div>
+        <div><dt>First reminders</dt><dd id="stat-first">0</dd></div>
+        <div><dt>Second reminders</dt><dd id="stat-second">0</dd></div>
+        <div><dt>Standby</dt><dd id="stat-standby">0</dd></div>
+        <div><dt>Returns</dt><dd id="stat-returns">0</dd></div>
+        <div><dt>Median return after reminder</dt><dd id="stat-latency">—</dd></div>
+      </dl>
+      <div class="log-controls">
+        <div class="log-tabs" role="tablist" aria-label="Log view">
+          <button id="tab-events" role="tab" aria-selected="true" aria-controls="events-view">Backend events</button>
+          <button id="tab-journal" role="tab" aria-selected="false" aria-controls="journal-view">Connection</button>
+        </div>
+        <div id="log-filters" class="log-filters" role="group" aria-label="Filter events">
+          <button data-filter="all" aria-pressed="true">All</button>
+          <button data-filter="study" aria-pressed="false">Reminders</button>
+          <button data-filter="state" aria-pressed="false">State</button>
+          <button data-filter="input" aria-pressed="false">Input</button>
+          <button data-filter="warnings" aria-pressed="false">Warnings</button>
+        </div>
+        <input id="log-search" type="search" placeholder="Search events" aria-label="Search events" autocomplete="off">
+      </div>
+      <div id="events-view" role="tabpanel" aria-labelledby="tab-events">
+        <div class="log-columns" aria-hidden="true"><span>Time</span><span>Level</span><span>Event</span><span>Message</span></div>
+        <ol id="events" class="log-list" aria-label="Backend events"></ol>
+      </div>
+      <div id="journal-view" role="tabpanel" aria-labelledby="tab-journal" hidden>
+        <ol id="journal" class="log-list journal-list" aria-label="Recent connection events"></ol>
+      </div>
+    </section>
   </main>
 </body>
 </html>
