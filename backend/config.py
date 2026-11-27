@@ -104,6 +104,22 @@ class WeatherConfig(FiniteConfig):
         return cls(**values)
 
 
+class TimerConfig(FiniteConfig):
+    """Pomodoro durations for the robot's timer page (the timer runs on the robot)."""
+    focus_minutes: float = Field(default=25, ge=0.1, le=180)
+    short_break_minutes: float = Field(default=5, ge=0.1, le=60)
+    long_break_minutes: float = Field(default=15, ge=0.1, le=120)
+    sessions: int = Field(default=4, ge=1, le=12)
+
+    @classmethod
+    def from_env(cls, environ=None):
+        return settings_from_env(cls, 'POMO_TIMER_', environ)
+
+    def serial_fields(self):
+        return {"pf": round(self.focus_minutes * 60), "ps": round(self.short_break_minutes * 60),
+                "pl": round(self.long_break_minutes * 60), "pn": self.sessions}
+
+
 def _boolean(environ, name, default):
     value = environ.get(name, default).strip().lower()
     if value not in {"true", "false"}:
@@ -131,6 +147,7 @@ class Settings:
     serial_port: str = ""
     serial_baudrate: int = 115200
     weather: WeatherConfig = field(default_factory=lambda: WeatherConfig())
+    timer: TimerConfig = field(default_factory=lambda: TimerConfig())
 
     @classmethod
     def from_env(cls, environ=None):
@@ -158,6 +175,7 @@ class Settings:
             perception=PerceptionConfig.from_env(environ),
             behaviour=BehaviourConfig.from_env(environ),
             weather=WeatherConfig.from_env(environ),
+            timer=TimerConfig.from_env(environ),
             dev_controls=_boolean(environ, "POMO_DEV_CONTROLS", "true"),
             sound_enabled=_boolean(environ, "POMO_SOUND_ENABLED", "true"),
             policy=PolicyConfig(

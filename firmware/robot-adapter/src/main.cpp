@@ -15,13 +15,15 @@
 //
 // Each line also carries the laptop's local time ("time") and, when available,
 // London weather ("wt", "wh", "wl", "wc", "wp"). Swiping left or right on the
-// screen cycles four pages: face, weather, clock and music. The robot returns
+// screen cycles six pages: face, timer, weather, clock, music and video. The robot returns
 // to the face page when the user leaves, a reminder starts, the link drops, or
 // after 30 s on another page (unless music is playing), so reminders are never
 // hidden. Tapping the music page plays or stops include/music_user.h when it
 // exists (made from your own file by tools/make_music.py, never committed),
 // otherwise the original tune in include/music_tune.h. Reminders stop music.
-// The fifth page, video, loops include/video_user.h (JPEG frames converted from
+// The timer page (second) runs a Pomodoro cycle on the robot: tap to start or
+// pause, hold to reset; durations come from the backend ("pf", "ps", "pl" in
+// seconds, "pn" focus sessions before a long break). The video page, loops include/video_user.h (JPEG frames converted from
 // your own GIF or video by tools/make_video.py, never committed) or, without
 // it, an original built-in animation. Leaving the page stops the video.
 
@@ -53,8 +55,12 @@ constexpr uint32_t FRAME_INTERVAL_MS = 200;  // At most 5 frames per second.
 constexpr uint8_t JPEG_QUALITY = 60;         // 0-100; higher is larger and sharper.
 
 enum class Face { Happy, Sad, Surprised, Bored, Idle };
-enum class Page { Face, Weather, Clock, Music, Video };
-constexpr int PAGE_COUNT = 5;
+enum class Page { Face, Timer, Weather, Clock, Music, Video };
+constexpr int PAGE_COUNT = 6;
+enum class Phase { Focus, ShortBreak, LongBreak };
+constexpr uint8_t TIMER_CHANNEL = 2;
+constexpr uint32_t LONG_PRESS_MS = 800;
+constexpr uint16_t DARK_GREY = 0x39E7;
 constexpr uint32_t BUILTIN_VIDEO_FRAME_MS = 50;  // 20 fps for the drawn animation.
 constexpr uint8_t SPEECH_CHANNEL = 0;
 constexpr uint8_t MUSIC_CHANNEL = 1;
@@ -107,6 +113,15 @@ uint32_t tuneLengthMs() {
 }
 const uint32_t MUSIC_LENGTH_MS = tuneLengthMs();
 #endif
+
+uint32_t timerFocusS = 1500, timerShortS = 300, timerLongS = 900;
+long timerSessions = 4;
+Phase phase = Phase::Focus;
+bool timerRunning = false;
+uint32_t phaseEndsAt = 0;
+uint32_t remainingMs = 1500000;
+long focusDone = 0;          // Focus sessions completed in the current cycle.
+long shownTimerSecond = -1;
 
 bool videoPlaying = false;
 uint32_t videoStartedAt = 0;
@@ -257,6 +272,20 @@ void handleLine(const char* text) {
     clockEpoch = epoch;
     clockSetAt = millis();
   }
+  long focusS = 0, shortS = 0, longS = 0, sessions = 0;
+  if (readLong(text, "pf", focusS) && readLong(text, "ps", shortS) && readLong(text, "pl", longS) &&
+      readLong(text, "pn", sessions) && focusS > 0 && shortS > 0 && longS > 0 && sessions > 0 &&
+      (uint32_t(focusS) != timerFocusS || uint32_t(shortS) != timerShortS ||
+       uint32_t(longS) != timerLongS || sessions != timerSessions)) {
+    const bool untouched = !timerRunning && phase == Phase::Focus && focusDone == 0 &&
+                           remainingMs == timerFocusS * 1000;
+    timerFocusS = focusS;
+    timerShortS = shortS;
+    timerLongS = longS;
+    timerSessions = sessions;
+    if (untouched) remainingMs = timerFocusS * 1000;  // A running cycle keeps its lengths.
+    dirty = true;
+  }
   long temp = 0, high = 0, low = 0;
   char cond[sizeof(weatherCondition)];
   if (readLong(text, "wt", temp) && readLong(text, "wh", high) && readLong(text, "wl", low) &&
@@ -349,6 +378,78 @@ camera_config_t cameraConfig() {
   return config;
 }
 
+// Pomodoro timer. It runs on the robot from millis(); breaks start
+// automatically after a focus session, and the next focus waits for a tap.
+uint32_t phaseLengthMs(Phase which) {
+  switch (which) {
+    case Phase::ShortBreak: return timerShortS * 1000;
+    case Phase::LongBreak: return timerLongS * 1000;
+    default: return timerFocusS * 1000;
+  }
+}
+
+uint32_t timerRemainingMs() {
+  if (!timerRunning) return remainingMs;
+  const int32_t left = int32_t(phaseEndsAt - millis());
+  return left > 0 ? uint32_t(left) : 0;
+}
+
+void startTimer() {
+  phaseEndsAt = millis() + remainingMs;
+  timerRunning = true;
+  dirty = true;
+}
+
+void pauseTimer() {
+  remainingMs = timerRemainingMs();
+  timerRunning = false;
+  dirty = true;
+}
+
+void resetTimer() {
+  timerRunning = false;
+  phase = Phase::Focus;
+  focusDone = 0;
+  remainingMs = phaseLengthMs(phase);
+  dirty = true;
+}
+
+void chime() {
+  if (!sound || M5.Speaker.isPlaying(SPEECH_CHANNEL)) return;  // Reminders win.
+  M5.Speaker.tone(784, 150, TIMER_CHANNEL, true);
+  M5.Speaker.tone(1047, 300, TIMER_CHANNEL, false);
+}
+
+void updateTimer() {
+  if (!timerRunning || timerRemainingMs() > 0) return;
+  chime();
+  if (phase == Phase::Focus) {
+    ++focusDone;
+    phase = focusDone % timerSessions == 0 ? Phase::LongBreak : Phase::ShortBreak;
+    remainingMs = phaseLengthMs(phase);
+    startTimer();
+  } else {
+    if (phase == Phase::LongBreak) focusDone = 0;
+    phase = Phase::Focus;
+    remainingMs = phaseLengthMs(phase);
+    timerRunning = false;
+  }
+  dirty = true;
+}
+
+const char* phaseName() {
+  switch (phase) {
+    case Phase::ShortBreak: return "Short break";
+    case Phase::LongBreak: return "Long break";
+    default: return "Focus";
+  }
+}
+
+void formatTime(char* out, size_t size, uint32_t ms) {
+  const uint32_t seconds = (ms + 999) / 1000;  // Round up so 0:00 means done.
+  snprintf(out, size, "%02lu:%02lu", (unsigned long)(seconds / 60), (unsigned long)(seconds % 60));
+}
+
 // Touch. The camera driver owns the internal I2C bus (shared with the FT6336
 // touch controller), so M5.Touch cannot be used while it runs. Instead the
 // touch registers are read through the I2C driver the camera installed; the
@@ -399,6 +500,7 @@ void pollTouch() {
   static uint32_t lastPoll = 0;
   static bool down = false;
   static int startX = 0, startY = 0, lastX = 0, lastY = 0;
+  static uint32_t downAt = 0;
   const uint32_t now = millis();
   if (now - lastPoll < TOUCH_POLL_MS) return;
   lastPoll = now;
@@ -408,6 +510,7 @@ void pollTouch() {
       down = true;
       startX = x;
       startY = y;
+      downAt = now;
     }
     lastX = x;
     lastY = y;
@@ -419,6 +522,11 @@ void pollTouch() {
   const int dx = lastX - startX;
   const int dy = lastY - startY;
   if (abs(dx) <= TAP_MAX_MOVE && abs(dy) <= TAP_MAX_MOVE) {
+    if (page == Page::Timer) {
+      if (now - downAt >= LONG_PRESS_MS) resetTimer();  // Hold: reset.
+      else if (timerRunning) pauseTimer();              // Tap: start/pause.
+      else startTimer();
+    }
     if (page == Page::Music) musicPlaying ? stopMusic() : startMusic();  // Tap: play/stop.
     if (page == Page::Video) {
       if (videoPlaying) {
@@ -648,6 +756,39 @@ void renderClock() {
   shownMinute = now / 60;
 }
 
+void renderTimer() {
+  const int cx = canvas.width() / 2;
+  const int cy = 104;
+  const int r = 88;
+  const uint32_t total = phaseLengthMs(phase);
+  const uint32_t left = timerRemainingMs();
+  canvas.fillArc(cx, cy, r - 8, r, 0, 360, DARK_GREY);
+  if (total > 0 && left > 0) {
+    const float sweep = 360.0f * left / total;  // The ring empties clockwise.
+    canvas.fillArc(cx, cy, r - 8, r, 270, 270 + sweep, WHITE);
+  }
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(GREY);
+  canvas.setTextSize(1.5);
+  canvas.drawString(phaseName(), cx, cy - 42);
+  canvas.drawString(timerRunning ? "Tap to pause" : left == total ? "Tap to start" : "Paused",
+                    cx, cy + 42);
+  char text[12];
+  formatTime(text, sizeof(text), left);
+  canvas.setFont(&fonts::Font7);
+  canvas.setTextSize(0.8);
+  canvas.setTextColor(WHITE);
+  canvas.drawString(text, cx, cy + 2);
+  canvas.setFont(&fonts::Font0);
+  canvas.setTextSize(2);
+  // One dot per focus session in the cycle; filled when done.
+  for (long i = 0; i < timerSessions; ++i) {
+    const int x = cx + int(2 * i - (timerSessions - 1)) * 8;
+    if (i < focusDone) canvas.fillCircle(x, 212, 4, WHITE);
+    else canvas.drawCircle(x, 212, 4, GREY);
+  }
+}
+
 void renderMusic() {
   const int cx = canvas.width() / 2;
   canvas.setTextDatum(middle_center);
@@ -752,6 +893,7 @@ void render() {
   canvas.fillScreen(BLACK);
   switch (page) {
     case Page::Face: renderFace(); break;
+    case Page::Timer: renderTimer(); break;
     case Page::Weather: renderWeather(); break;
     case Page::Clock: renderClock(); break;
     case Page::Music: renderMusic(); break;
@@ -765,6 +907,15 @@ void render() {
   }
 
   canvas.setTextColor(GREY);
+  if (page == Page::Face && timerRunning) {  // Small countdown above the face.
+    char text[24], time[12];
+    formatTime(time, sizeof(time), timerRemainingMs());
+    snprintf(text, sizeof(text), "%s %s", phase == Phase::Focus ? "Focus" : "Break", time);
+    canvas.setTextDatum(top_center);
+    canvas.setTextSize(1.5);
+    canvas.drawString(text, cx, 8);
+    canvas.setTextSize(2);
+  }
   if (!linked) {
     canvas.setTextDatum(bottom_center);
     canvas.drawString("No link", cx, canvas.height() - 14);
@@ -812,6 +963,14 @@ void loop() {
   }
   pollTouch();
   updateMusic();
+  updateTimer();
+  if (page == Page::Timer || (page == Page::Face && timerRunning)) {
+    const long second = long((timerRemainingMs() + 999) / 1000);
+    if (second != shownTimerSecond) {
+      shownTimerSecond = second;
+      dirty = true;  // Countdown tick.
+    }
+  }
   if (page != Page::Face && !(page == Page::Music && musicPlaying) && !videoPlaying &&
       millis() - pageChangedAt > PAGE_TIMEOUT_MS) {
     showPage(Page::Face);

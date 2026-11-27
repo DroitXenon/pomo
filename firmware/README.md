@@ -29,9 +29,9 @@ rates. Two consequences:
 The camera takes over the CoreS3's internal I2C bus, so the sketch starts the
 speaker first and does not use `M5.update()` while the camera runs.
 
-Swipe left or right on the screen to switch between four pages: face, weather
-(from Open-Meteo via the backend, London by default), a clock (the laptop's
-local time) and music. The face page returns automatically when the user
+Swipe left or right on the screen to switch between six pages: face, timer,
+weather (from Open-Meteo via the backend, London by default), a clock (the
+laptop's local time), music and video. The face page returns automatically when the user
 leaves, a reminder starts, the link drops, or after 30 seconds on another page
 (except while music plays).
 
@@ -50,7 +50,15 @@ so the audio is never committed; use only audio you have the right to use.
 Music respects mute, plays more quietly than reminders, and stops when a
 reminder is spoken.
 
-The fifth page is video. Tap to play or stop; it loops until stopped and stops
+The second page is a Pomodoro timer: tap to start or pause, hold about a
+second to reset. Focus (25 min) is followed automatically by a short break
+(5 min), or a long break (15 min) after every 4th session; the next focus waits
+for a tap. A chime marks each change (muted with sound, and never over a
+reminder), and the face page shows a small countdown while it runs. The
+backend sends the durations from `POMO_TIMER_*` as `pf`, `ps`, `pl` (seconds)
+and `pn` (sessions); without them the defaults above apply.
+
+The last page is video. Tap to play or stop; it loops until stopped and stops
 when you swipe away, the user leaves or a reminder starts. By default it plays
 "Pomo Dance", an original animation drawn in code. To play your own GIF or
 video (needs ffmpeg), convert it and upload again:

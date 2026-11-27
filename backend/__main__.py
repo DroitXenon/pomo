@@ -19,7 +19,7 @@ uvicorn.run(
         initially_muted=not settings.sound_enabled,
         camera_config=settings.camera, perception_config=settings.perception,
         behaviour_config=settings.behaviour, display_adapter=display,
-        weather_config=settings.weather,
+        weather_config=settings.weather, timer_config=settings.timer,
     ),
     host=settings.host, port=settings.port, ws_max_size=4096,
 )

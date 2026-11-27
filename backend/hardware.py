@@ -99,6 +99,7 @@ class SerialDisplay:
         self.read_timeout = read_timeout
         self._local_time = local_time or local_epoch
         self._weather = {}
+        self._timer = {}
         self.parser = FrameParser(max_frame_bytes)
         self.on_frame = None  # Called on the serial thread with each JPEG.
         self.frames_received = 0
@@ -107,10 +108,14 @@ class SerialDisplay:
         """Replace the weather fields added to each line (called from the event loop)."""
         self._weather = dict(fields)
 
+    def set_timer(self, fields):
+        """Pomodoro durations for the robot's timer page (seconds and session count)."""
+        self._timer = dict(fields)
+
     def _line(self, message):
-        # Local wall time and weather ride on every line, including heartbeats,
-        # without affecting publish() de-duplication of the display state.
-        return {**message, "time": int(self._local_time()), **self._weather}
+        # Local wall time, weather and timer settings ride on every line,
+        # including heartbeats, without affecting publish() de-duplication.
+        return {**message, "time": int(self._local_time()), **self._weather, **self._timer}
 
     def publish(self, snapshot):
         """Queue the newest message without blocking; older pending ones are replaced."""

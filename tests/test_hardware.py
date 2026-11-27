@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from backend.app import create_app
-from backend.config import Settings
+from backend.config import Settings, TimerConfig
 from backend.hardware import FRAME_MAGIC, FrameParser, SerialDisplay, display_message
 from backend.policy import PolicyConfig
 from tests.camera_helpers import DecodeProcessor
@@ -340,3 +340,21 @@ def test_lines_carry_local_time_and_latest_weather_without_breaking_deduplicatio
     display._pending.get_nowait()
     display.publish(snapshot("happy"))
     assert display._pending.qsize() == 0, "time and weather do not defeat de-duplication"
+
+
+def test_lines_carry_timer_settings():
+    port = FakePort()
+    display = SerialDisplay("/dev/fake", serial_factory=Factory([port]), local_time=lambda: 1795776000.0)
+    display.set_timer(TimerConfig(focus_minutes=0.5, short_break_minutes=0.25).serial_fields())
+    display.deliver(display_message(snapshot("happy")))
+    assert {key: port.lines[-1][key] for key in ("pf", "ps", "pl", "pn")} == {"pf": 30, "ps": 15, "pl": 900, "pn": 4}
+
+
+def test_timer_settings_defaults_and_validation():
+    assert Settings.from_env({}).timer.serial_fields() == {"pf": 1500, "ps": 300, "pl": 900, "pn": 4}
+    custom = Settings.from_env({"POMO_TIMER_FOCUS_MINUTES": "50", "POMO_TIMER_SESSIONS": "2"}).timer
+    assert custom.serial_fields()["pf"] == 3000 and custom.sessions == 2
+    for bad in ({"POMO_TIMER_FOCUS_MINUTES": "0"}, {"POMO_TIMER_SESSIONS": "0"},
+                {"POMO_TIMER_LONG_BREAK_MINUTES": "abc"}, {"POMO_TIMER_SHORT_BREAK_MINUTES": "61"}):
+        with pytest.raises(ValueError):
+            Settings.from_env(bad)

@@ -617,7 +617,7 @@ def create_app(
     camera_config: CameraConfig | None = None,
     perception_config: PerceptionConfig | None = None,
     behaviour_config: BehaviourConfig | None = None, processor_factory=None,
-    display_adapter=None, weather_config=None,
+    display_adapter=None, weather_config=None, timer_config=None,
 ) -> FastAPI:
     if not math.isfinite(tick_interval) or tick_interval <= 0:
         raise ValueError("tick_interval must be finite and positive")
@@ -644,6 +644,8 @@ def create_app(
                     in_flight = asyncio.run_coroutine_threadsafe(runtime.robot_frame(data), loop)
 
             display_adapter.on_frame = on_frame
+            if timer_config is not None:
+                display_adapter.set_timer(timer_config.serial_fields())
             display_adapter.start()
             async with runtime.lock:
                 runtime._publish_display(runtime.snapshot())
