@@ -12,3 +12,4 @@ models/*.download
 
 # Audio converted from your own files for the robot music page (never commit).
 firmware/robot-adapter/include/music_user.h
+firmware/robot-adapter/include/video_user.h

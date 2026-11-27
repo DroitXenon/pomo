@@ -48,7 +48,24 @@ conda run --name pomo python firmware/robot-adapter/tools/make_music.py --remove
 The result, `include/music_user.h` (16 kHz mono, at most 180 s), is gitignored
 so the audio is never committed; use only audio you have the right to use.
 Music respects mute, plays more quietly than reminders, and stops when a
-reminder is spoken. Touch is
+reminder is spoken.
+
+The fifth page is video. Tap to play or stop; it loops until stopped and stops
+when you swipe away, the user leaves or a reminder starts. By default it plays
+"Pomo Dance", an original animation drawn in code. To play your own GIF or
+video (needs ffmpeg), convert it and upload again:
+
+```sh
+conda run --name pomo python firmware/robot-adapter/tools/make_video.py clip.gif --title "My clip"
+conda run --name pomo python firmware/robot-adapter/tools/make_video.py clip.mp4 --seconds 15 --audio   # with its soundtrack
+cd firmware/robot-adapter && pio run -t upload
+conda run --name pomo python firmware/robot-adapter/tools/make_video.py --remove   # back to the animation
+```
+
+Frames are scaled to fit 320x240 and stored as JPEGs in `include/video_user.h`
+(gitignored), up to 30 s, 15 fps and 4 MB; `--fps`, `--quality` and `--seconds`
+trade smoothness for size. `--audio` also replaces `include/music_user.h` with
+the file's soundtrack, which then plays with the video (and on the music page). Touch is
 read directly from the FT6336 controller (address 0x38) through the I2C driver
 installed by the camera; if the camera did not start, M5Unified touch is used.
 

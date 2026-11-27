@@ -266,6 +266,8 @@ Every line also carries `time` (the laptop's local time) and, once fetched, weat
 
 Swipe left or right on the robot screen to move between the **face**, **weather** (temperature, condition icon, high/low, place), **clock** (time and date) and **music** pages; dots at the bottom show the current page. The robot always goes back to the face when the user leaves, a reminder starts or the link drops, and after 30 s on another page unless music is playing.
 
+The fifth page, **video**, loops an original animation by default, or a GIF/video converted with `tools/make_video.py clip.gif` (optionally `--audio` for its soundtrack) into the gitignored `include/video_user.h`. Tap to play or stop; it stops when you swipe away, leave the desk or a reminder starts.
+
 Tap the music page to play or stop. It plays an original tune by default, or your own audio after `tools/make_music.py song.mp3 --title "..."` and a firmware upload. The generated `include/music_user.h` is gitignored, so audio never enters the repository. Music respects mute and stops when a reminder is spoken. Because the camera owns the internal I2C bus, the firmware reads the FT6336 touch controller through the camera's I2C driver instead of `M5.Touch`; without a working camera it falls back to M5Unified touch.
 
 ### Firmware build notes
