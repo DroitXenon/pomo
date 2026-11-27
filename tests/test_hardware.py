@@ -92,7 +92,9 @@ def test_missing_device_is_unavailable_then_retried_with_latest_state():
     clock = Clock()
     port = FakePort()
     factory = Factory([port], failures=1)
-    display = SerialDisplay("/dev/fake", serial_factory=factory, clock=clock, retry_seconds=2)
+    display = SerialDisplay("/dev/fake", serial_factory=factory, clock=clock, retry_seconds=2,
+                            local_time=lambda: 1795776000.7)
+    display.set_weather({"wt": 9, "wh": 11, "wl": 5, "wc": "rain", "wp": "London"})
     assert display.deliver(display_message(snapshot("surprised"))) is False
     assert display.status == "unavailable"
     assert display.deliver(display_message(snapshot("sad", True, 1, 1))) is False
@@ -100,7 +102,8 @@ def test_missing_device_is_unavailable_then_retried_with_latest_state():
     clock.now = 2.0
     assert display.deliver() is True, "heartbeat resends the newest state after reconnect"
     assert display.status == "connected"
-    assert port.lines == [display_message(snapshot("sad", True, 1, 1))]
+    assert port.lines == [{**display_message(snapshot("sad", True, 1, 1)), "time": 1795776000,
+                           "wt": 9, "wh": 11, "wl": 5, "wc": "rain", "wp": "London"}]
 
 
 def test_write_failure_disconnects_and_reconnects_without_raising():
@@ -318,3 +321,22 @@ def test_frames_are_ignored_unless_robot_input_is_monitoring():
 def command(ws, kind, **fields):
     ws.send_json({"type": kind, **fields})
     return ws.receive_json()
+
+
+def test_lines_carry_local_time_and_latest_weather_without_breaking_deduplication():
+    clock, now = Clock(), [1795776000.0]
+    port = FakePort()
+    display = SerialDisplay("/dev/fake", serial_factory=Factory([port]), clock=clock,
+                            heartbeat_seconds=2, local_time=lambda: now[0])
+    display.deliver(display_message(snapshot("happy")))
+    assert port.lines[-1]["time"] == 1795776000 and "wt" not in port.lines[-1]
+    display.set_weather({"wt": -3, "wh": 1, "wl": -5, "wc": "snow", "wp": "London"})
+    clock.now, now[0] = 2.0, 1795776002.0
+    assert display.deliver() is True, "the heartbeat carries new weather and time"
+    assert port.lines[-1] == {**display_message(snapshot("happy")), "time": 1795776002,
+                              "wt": -3, "wh": 1, "wl": -5, "wc": "snow", "wp": "London"}
+    display.publish(snapshot("happy"))
+    assert display._pending.qsize() == 1, "first publish queues"
+    display._pending.get_nowait()
+    display.publish(snapshot("happy"))
+    assert display._pending.qsize() == 0, "time and weather do not defeat de-duplication"

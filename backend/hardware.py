@@ -36,6 +36,12 @@ def display_message(snapshot):
     }
 
 
+def local_epoch():
+    """Seconds since 1970 in the laptop's local time zone, for the robot clock."""
+    now = time.time()
+    return now + time.localtime(now).tm_gmtoff
+
+
 class FrameParser:
     """Extract framed JPEGs from the device byte stream, resynchronising on MAGIC."""
 
@@ -73,7 +79,7 @@ class SerialDisplay:
     """Latest-value serial writer with reconnect and explicit shutdown."""
 
     def __init__(self, port, baudrate=115200, *, serial_factory=None,
-                 clock=time.monotonic, retry_seconds=2.0, heartbeat_seconds=2.0,
+                 clock=time.monotonic, local_time=None, retry_seconds=2.0, heartbeat_seconds=2.0,
                  max_frame_bytes=524288, read_timeout=0.05):
         self.port = port
         self.baudrate = baudrate
@@ -91,9 +97,20 @@ class SerialDisplay:
         self._stop = threading.Event()
         self._thread = None
         self.read_timeout = read_timeout
+        self._local_time = local_time or local_epoch
+        self._weather = {}
         self.parser = FrameParser(max_frame_bytes)
         self.on_frame = None  # Called on the serial thread with each JPEG.
         self.frames_received = 0
+
+    def set_weather(self, fields):
+        """Replace the weather fields added to each line (called from the event loop)."""
+        self._weather = dict(fields)
+
+    def _line(self, message):
+        # Local wall time and weather ride on every line, including heartbeats,
+        # without affecting publish() de-duplication of the display state.
+        return {**message, "time": int(self._local_time()), **self._weather}
 
     def publish(self, snapshot):
         """Queue the newest message without blocking; older pending ones are replaced."""
@@ -169,7 +186,7 @@ class SerialDisplay:
             # Keep the newest state so it is sent after reconnecting.
             self._last_sent = message
             return False
-        line = (json.dumps(message, separators=(",", ":")) + "\n").encode("ascii")
+        line = (json.dumps(self._line(message), separators=(",", ":")) + "\n").encode("ascii")
         try:
             self._device.write(line)
             self._device.flush()

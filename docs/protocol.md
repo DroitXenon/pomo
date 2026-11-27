@@ -394,6 +394,16 @@ When `POMO_SERIAL_PORT` names a device (for example `/dev/cu.usbmodem1101` on ma
 - `sound`: false when the shared preference is muted.
 - `standby`: as in the snapshot.
 - `camera`: true while power is on, monitoring is enabled and `input_source` is `robot`; the device streams frames only while it is true.
+- `time`: the laptop's local wall time as whole seconds since 1970 (UTC epoch shifted by the local offset), added to every line including heartbeats. The robot's clock page counts on from the latest value.
+- `wt`, `wh`, `wl`, `wc`, `wp` (optional): current temperature, today's high and low (whole °C), condition (`clear`, `partly`, `cloudy`, `fog`, `rain`, `snow` or `storm`) and place label, for the weather page. They are present once the backend has fetched weather from Open-Meteo and are repeated on every line. `time` and weather do not trigger extra writes; they ride on state changes and the 2-second heartbeat.
+
+Example with the optional fields:
+
+```json
+{"v":1,"display":"happy","reminder":0,"stage":0,"sound":true,"standby":false,"camera":true,"time":1795776000,"wt":4,"wh":4,"wl":2,"wc":"cloudy","wp":"London"}
+```
+
+The robot screen has three pages, changed by swiping left or right: face, weather and clock, with page dots at the bottom. It returns to the face page when `display` becomes `surprised` or `sad`, when a new non-zero `reminder` arrives, when the link times out, and after 30 seconds on another page. Pages are local to the device; the backend state and snapshots are unaffected.
 
 Device to backend: binary camera frames, each `PJPG` + uint32 length + uint32 sequence (both little-endian) + a JPEG. The firmware sends 320x240 JPEGs at up to 5 frames per second. The backend resynchronises on `PJPG`, discards frames over `POMO_CAMERA_MAX_BYTES`, and drops frames that arrive while the previous one is still being processed. After each boot the device also sends one text line, `pomo-robot boot reset_reason=<n> camera=<0|1>`, which the backend logs. Frames are never stored or shown on the robot.
 

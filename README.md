@@ -252,6 +252,8 @@ Device to host, binary camera frames while `camera` is true:
 "PJPG" | uint32 length (LE) | uint32 sequence (LE) | JPEG bytes      320x240, up to about 5 fps
 ```
 
+Every line also carries `time` (the laptop's local time) and, once fetched, weather fields `wt`/`wh`/`wl`/`wc`/`wp` from Open-Meteo, which `backend/weather.py` refreshes every 15 minutes without blocking the event loop.
+
 `FrameParser` resynchronises on the `PJPG` magic, discards frames above `POMO_CAMERA_MAX_BYTES`, and drops frames that arrive while the worker is busy. Accepted frames go through `Runtime.robot_frame`, which reuses the `/camera/frame` checks and processor with input source `robot`. After each boot the device prints one line, `pomo-robot boot reset_reason=<n> camera=<0|1>`, which the backend logs.
 
 ### Robustness
@@ -260,11 +262,15 @@ Device to host, binary camera frames while `camera` is true:
 - The firmware shows `bored` with "No link" after 6 s without a line, and treats the first message after a link starts as silent, so an old reminder is never replayed.
 - The device sends no commands; dismissal and other controls stay in the control page.
 
+### Robot pages
+
+Swipe left or right on the robot screen to move between the **face**, **weather** (temperature, condition icon, high/low, place) and **clock** (time and date) pages; dots at the bottom show the current page. The robot always goes back to the face when the user leaves, a reminder starts or the link drops, and after 30 s on another page. Because the camera owns the internal I2C bus, the firmware reads the FT6336 touch controller through the camera's I2C driver instead of `M5.Touch`; without a working camera it falls back to M5Unified touch.
+
 ### Firmware build notes
 
 - TinyUSB CDC (`ARDUINO_USB_MODE=0`) is used because the USB-Serial-JTAG driver in Arduino-ESP32 2.0.x loses bytes at camera data rates.
 - Uploads reset the board with a 1200-baud touch; `tools/after_upload.py` then restarts it into the new firmware. If the board is not found, hold reset for about 3 s (green LED) and upload again.
-- The camera takes over the internal I2C bus, so the speaker is started first and `M5.update()` (touch and power button polling) is not used.
+- The camera takes over the internal I2C bus, so the speaker is started first and `M5.update()` (touch and power button polling) is not used while it runs; swipes are read directly from the touch controller (see Robot pages).
 - Speech clips in `include/clips.h` (16 kHz mono) are generated from `REMINDER_MESSAGES` by `tools/make_clips.py`; a test fails if they are out of date.
 
 ```sh
@@ -310,6 +316,10 @@ Settings come from `.env` in the repository root, overridden by process environm
 | `POMO_SOUND_ENABLED` | `true` | Initial shared sound preference |
 | `POMO_SERIAL_PORT` | empty | CoreS3 serial device; empty disables the robot |
 | `POMO_SERIAL_BAUDRATE` | `115200` | Must match the firmware |
+| `POMO_WEATHER_ENABLED` | `true` | Fetch weather for the robot's weather page (only with a robot) |
+| `POMO_WEATHER_LATITUDE` / `LONGITUDE` | `51.4988` / `-0.1749` | Location (London); the only data sent to Open-Meteo |
+| `POMO_WEATHER_PLACE` | `London` | Label on the robot, 1 to 15 plain ASCII characters |
+| `POMO_WEATHER_REFRESH_SECONDS` | `900` | Weather refresh interval, at least 300 |
 
 ### Camera transport
 
@@ -395,6 +405,7 @@ backend/
   eyes.py             Iris and blink diagnostics
   observations.py     Camera observation models
   hardware.py         SerialDisplay and FrameParser for the CoreS3
+  weather.py          Open-Meteo weather for the robot's weather page
   behaviour.py        Legacy policy kept for historical tests
 simulator/            index.html, app.js (rendering, log, controls), camera.js (capture, uploads), style.css
 firmware/

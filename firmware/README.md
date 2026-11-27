@@ -27,7 +27,14 @@ rates. Two consequences:
   reset button for about 3 seconds (green LED) and upload again.
 
 The camera takes over the CoreS3's internal I2C bus, so the sketch starts the
-speaker first and does not poll touch or the power button (`M5.update()`).
+speaker first and does not use `M5.update()` while the camera runs.
+
+Swipe left or right on the screen to switch between three pages: face, weather
+(from Open-Meteo via the backend, London by default) and a clock (the laptop's
+local time). The face page returns automatically when the user leaves, a
+reminder starts, the link drops, or after 30 seconds on another page. Touch is
+read directly from the FT6336 controller (address 0x38) through the I2C driver
+installed by the camera; if the camera did not start, M5Unified touch is used.
 
 The spoken sentences are recorded clips in `include/clips.h` (about 3.6 s each,
 16 kHz mono, macOS voice "Flo (English (UK))"). They are generated from
