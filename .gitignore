@@ -9,3 +9,6 @@ models/*.task
 condaenv.*.requirements.txt
 models/*.download
 .tools/
+
+# Audio converted from your own files for the robot music page (never commit).
+firmware/robot-adapter/include/music_user.h
