@@ -21,6 +21,9 @@
 // hidden. Tapping the music page plays or stops include/music_user.h when it
 // exists (made from your own file by tools/make_music.py, never committed),
 // otherwise the original tune in include/music_tune.h. Reminders stop music.
+// The fifth page, video, loops include/video_user.h (JPEG frames converted from
+// your own GIF or video by tools/make_video.py, never committed) or, without
+// it, an original built-in animation. Leaving the page stops the video.
 
 #include <M5Unified.h>
 #include <esp_camera.h>
@@ -34,6 +37,10 @@
 #include "music_user.h"
 #define HAVE_USER_MUSIC 1
 #endif
+#if __has_include("video_user.h")
+#include "video_user.h"
+#define HAVE_USER_VIDEO 1
+#endif
 
 namespace {
 
@@ -46,8 +53,9 @@ constexpr uint32_t FRAME_INTERVAL_MS = 200;  // At most 5 frames per second.
 constexpr uint8_t JPEG_QUALITY = 60;         // 0-100; higher is larger and sharper.
 
 enum class Face { Happy, Sad, Surprised, Bored, Idle };
-enum class Page { Face, Weather, Clock, Music };
-constexpr int PAGE_COUNT = 4;
+enum class Page { Face, Weather, Clock, Music, Video };
+constexpr int PAGE_COUNT = 5;
+constexpr uint32_t BUILTIN_VIDEO_FRAME_MS = 50;  // 20 fps for the drawn animation.
 constexpr uint8_t SPEECH_CHANNEL = 0;
 constexpr uint8_t MUSIC_CHANNEL = 1;
 constexpr uint8_t MUSIC_VOLUME = 150;  // Per-channel, below the reminder speech.
@@ -100,7 +108,23 @@ uint32_t tuneLengthMs() {
 const uint32_t MUSIC_LENGTH_MS = tuneLengthMs();
 #endif
 
+bool videoPlaying = false;
+uint32_t videoStartedAt = 0;
+long shownVideoFrame = -1;
+void stopMusic();
+void startMusic();
+
+void stopVideo() {
+  if (!videoPlaying) return;
+  videoPlaying = false;
+#if defined(HAVE_USER_VIDEO) && defined(USER_VIDEO_WITH_AUDIO) && defined(HAVE_USER_MUSIC)
+  stopMusic();  // The soundtrack belongs to the video.
+#endif
+  dirty = true;
+}
+
 void showPage(Page next) {
+  if (next != Page::Video) stopVideo();
   if (next != page) dirty = true;
   page = next;
   pageChangedAt = millis();
@@ -253,7 +277,10 @@ void handleLine(const char* text) {
 
   if (reminder > 0 && reminder != reminderId && nextSound && linked) speak(stage);
   else if ((reminder == 0 || !nextSound) && M5.Speaker.isPlaying(SPEECH_CHANNEL)) M5.Speaker.stop(SPEECH_CHANNEL);
-  if (reminder > 0 && reminder != reminderId) stopMusic();
+  if (reminder > 0 && reminder != reminderId) {
+    stopMusic();
+    stopVideo();
+  }
   if (!nextSound) stopMusic();
   reminderId = reminder;
   sound = nextSound;
@@ -393,6 +420,19 @@ void pollTouch() {
   const int dy = lastY - startY;
   if (abs(dx) <= TAP_MAX_MOVE && abs(dy) <= TAP_MAX_MOVE) {
     if (page == Page::Music) musicPlaying ? stopMusic() : startMusic();  // Tap: play/stop.
+    if (page == Page::Video) {
+      if (videoPlaying) {
+        stopVideo();
+      } else {
+        videoPlaying = true;
+        videoStartedAt = millis();
+        shownVideoFrame = -1;
+#if defined(HAVE_USER_VIDEO) && defined(USER_VIDEO_WITH_AUDIO) && defined(HAVE_USER_MUSIC)
+        startMusic();  // Respects mute.
+#endif
+        dirty = true;
+      }
+    }
     return;
   }
   if (abs(dx) < SWIPE_MIN_DX || abs(dy) > SWIPE_MAX_DY) return;
@@ -638,6 +678,75 @@ void renderMusic() {
   canvas.drawString(text, cx, 200);
 }
 
+#ifdef HAVE_USER_VIDEO
+const char* const VIDEO_TITLE = USER_VIDEO_TITLE;
+#else
+const char* const VIDEO_TITLE = "Pomo Dance";
+#endif
+
+long videoFrame() {
+  const uint32_t elapsed = millis() - videoStartedAt;
+#ifdef HAVE_USER_VIDEO
+  return long(uint64_t(elapsed) * USER_VIDEO_FPS / 1000 % USER_VIDEO_FRAMES);
+#else
+  return long(elapsed / BUILTIN_VIDEO_FRAME_MS);
+#endif
+}
+
+// Original built-in animation: a bobbing robot head with glancing eyes and
+// floating notes, drawn from primitives so it needs no image data.
+void drawBuiltinAnimation(long frame) {
+  const int cx = canvas.width() / 2;
+  const float t = frame * BUILTIN_VIDEO_FRAME_MS / 1000.0f;
+  const int bob = int(sinf(t * 2 * PI * 1.2f) * 12);
+  const int tilt = int(sinf(t * 2 * PI * 0.6f) * 10);
+  const int x = cx + tilt, y = 112 + bob;
+  canvas.fillRoundRect(x - 70, y - 55, 140, 110, 22, WHITE);
+  canvas.fillRoundRect(x - 58, y - 44, 116, 80, 16, BLACK);
+  canvas.drawWideLine(x, y - 55, x, y - 72, 4, WHITE);
+  canvas.fillCircle(x, y - 76, 7, WHITE);
+  const int look = int(sinf(t * 2 * PI * 0.5f) * 10);
+  const bool wink = (frame / 10) % 8 == 0;
+  canvas.fillRoundRect(x - 34 + look - 8, y - 18, 16, wink ? 4 : 22, 4, WHITE);
+  canvas.fillRoundRect(x + 34 + look - 8, y - 18, 16, 22, 4, WHITE);
+  for (int k = 0; k < 4; ++k) canvas.drawArc(x, y + 6, 16 - k, 16 - k, 30, 150, WHITE);
+  for (int n = 0; n < 3; ++n) {  // Notes drifting upward on both sides.
+    const float phase = fmodf(t * 0.6f + n / 3.0f, 1.0f);
+    const int ny = 210 - int(phase * 190);
+    const int nx = (n % 2 ? cx + 120 : cx - 120) + int(sinf(phase * 2 * PI) * 10);
+    const uint16_t c = phase > 0.8f ? GREY : WHITE;
+    canvas.fillEllipse(nx, ny, 6, 5, c);
+    canvas.drawWideLine(nx + 5, ny, nx + 5, ny - 20, 2, c);
+    canvas.drawWideLine(nx + 5, ny - 20, nx + 13, ny - 14, 2, c);
+  }
+}
+
+void renderVideo() {
+  const int cx = canvas.width() / 2;
+  if (videoPlaying) {
+    const long frame = videoFrame();
+    shownVideoFrame = frame;
+#ifdef HAVE_USER_VIDEO
+    const uint32_t start = USER_VIDEO_OFFSETS[frame];
+    canvas.drawJpg(USER_VIDEO_DATA + start, USER_VIDEO_OFFSETS[frame + 1] - start,
+                   (canvas.width() - USER_VIDEO_WIDTH) / 2, (canvas.height() - USER_VIDEO_HEIGHT) / 2);
+#else
+    drawBuiltinAnimation(frame);
+#endif
+    return;
+  }
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(GREY);
+  canvas.drawString("Video", cx, 22);
+  canvas.setTextColor(WHITE);
+  canvas.drawString(VIDEO_TITLE, cx, 56);
+  canvas.drawCircle(cx, 118, 34, WHITE);
+  canvas.drawCircle(cx, 118, 33, WHITE);
+  canvas.fillTriangle(cx - 10, 100, cx - 10, 136, cx + 18, 118, WHITE);
+  canvas.setTextColor(GREY);
+  canvas.drawString("Tap to play", cx, 190);
+}
+
 void render() {
   const int cx = canvas.width() / 2;
   canvas.fillScreen(BLACK);
@@ -646,6 +755,7 @@ void render() {
     case Page::Weather: renderWeather(); break;
     case Page::Clock: renderClock(); break;
     case Page::Music: renderMusic(); break;
+    case Page::Video: renderVideo(); break;
   }
   // Page indicator: one dot per page, the current one filled.
   for (int i = 0; i < PAGE_COUNT; ++i) {
@@ -694,6 +804,7 @@ void loop() {
     cameraWanted = false;
     M5.Speaker.stop();
     musicPlaying = false;
+    videoPlaying = false;
     face = Face::Bored;
     reminderId = 0;
     showPage(Page::Face);
@@ -701,7 +812,7 @@ void loop() {
   }
   pollTouch();
   updateMusic();
-  if (page != Page::Face && !(page == Page::Music && musicPlaying) &&
+  if (page != Page::Face && !(page == Page::Music && musicPlaying) && !videoPlaying &&
       millis() - pageChangedAt > PAGE_TIMEOUT_MS) {
     showPage(Page::Face);
   }
@@ -710,6 +821,7 @@ void loop() {
     lastProgressAt = millis();
     dirty = true;  // Progress bar and time.
   }
+  if (videoPlaying && videoFrame() != shownVideoFrame) dirty = true;  // Next frame due.
   if (page == Page::Clock && clockEpoch > 0 &&
       (clockEpoch + long((millis() - clockSetAt) / 1000)) / 60 != shownMinute) {
     dirty = true;  // Redraw when the minute changes.
