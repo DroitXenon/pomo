@@ -29,10 +29,26 @@ rates. Two consequences:
 The camera takes over the CoreS3's internal I2C bus, so the sketch starts the
 speaker first and does not use `M5.update()` while the camera runs.
 
-Swipe left or right on the screen to switch between three pages: face, weather
-(from Open-Meteo via the backend, London by default) and a clock (the laptop's
-local time). The face page returns automatically when the user leaves, a
-reminder starts, the link drops, or after 30 seconds on another page. Touch is
+Swipe left or right on the screen to switch between four pages: face, weather
+(from Open-Meteo via the backend, London by default), a clock (the laptop's
+local time) and music. The face page returns automatically when the user
+leaves, a reminder starts, the link drops, or after 30 seconds on another page
+(except while music plays).
+
+Tap the music page to play or stop. By default it plays "Pomo Theme", a short
+original tune in `include/music_tune.h`. To play your own audio, convert it
+(ffmpeg, or macOS afconvert) and upload again:
+
+```sh
+conda run --name pomo python firmware/robot-adapter/tools/make_music.py song.mp3 --title "My song" --seconds 60
+cd firmware/robot-adapter && pio run -t upload
+conda run --name pomo python firmware/robot-adapter/tools/make_music.py --remove   # back to the tune
+```
+
+The result, `include/music_user.h` (16 kHz mono, at most 180 s), is gitignored
+so the audio is never committed; use only audio you have the right to use.
+Music respects mute, plays more quietly than reminders, and stops when a
+reminder is spoken. Touch is
 read directly from the FT6336 controller (address 0x38) through the I2C driver
 installed by the camera; if the camera did not start, M5Unified touch is used.
 

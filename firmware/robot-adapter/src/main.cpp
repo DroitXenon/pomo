@@ -15,9 +15,12 @@
 //
 // Each line also carries the laptop's local time ("time") and, when available,
 // London weather ("wt", "wh", "wl", "wc", "wp"). Swiping left or right on the
-// screen cycles three pages: face, weather and clock. The robot returns to the
-// face page when the user leaves, a reminder starts, the link drops, or after
-// 30 s on another page, so reminders are never hidden.
+// screen cycles four pages: face, weather, clock and music. The robot returns
+// to the face page when the user leaves, a reminder starts, the link drops, or
+// after 30 s on another page (unless music is playing), so reminders are never
+// hidden. Tapping the music page plays or stops include/music_user.h when it
+// exists (made from your own file by tools/make_music.py, never committed),
+// otherwise the original tune in include/music_tune.h. Reminders stop music.
 
 #include <M5Unified.h>
 #include <esp_camera.h>
@@ -26,6 +29,11 @@
 #include <time.h>
 
 #include "clips.h"
+#include "music_tune.h"
+#if __has_include("music_user.h")
+#include "music_user.h"
+#define HAVE_USER_MUSIC 1
+#endif
 
 namespace {
 
@@ -38,8 +46,12 @@ constexpr uint32_t FRAME_INTERVAL_MS = 200;  // At most 5 frames per second.
 constexpr uint8_t JPEG_QUALITY = 60;         // 0-100; higher is larger and sharper.
 
 enum class Face { Happy, Sad, Surprised, Bored, Idle };
-enum class Page { Face, Weather, Clock };
-constexpr int PAGE_COUNT = 3;
+enum class Page { Face, Weather, Clock, Music };
+constexpr int PAGE_COUNT = 4;
+constexpr uint8_t SPEECH_CHANNEL = 0;
+constexpr uint8_t MUSIC_CHANNEL = 1;
+constexpr uint8_t MUSIC_VOLUME = 150;  // Per-channel, below the reminder speech.
+constexpr int TAP_MAX_MOVE = 20;
 constexpr uint32_t PAGE_TIMEOUT_MS = 30000;  // Other pages fall back to the face.
 constexpr int SWIPE_MIN_DX = 60;
 constexpr int SWIPE_MAX_DY = 60;
@@ -69,6 +81,24 @@ bool haveWeather = false;
 long weatherTemp = 0, weatherHigh = 0, weatherLow = 0;
 char weatherCondition[10] = "";
 char weatherPlace[16] = "";
+
+bool musicPlaying = false;
+uint32_t musicStartedAt = 0;
+size_t tuneIndex = 0;
+uint32_t nextNoteAt = 0;
+
+#ifdef HAVE_USER_MUSIC
+const char* const MUSIC_TITLE = USER_MUSIC_TITLE;
+const uint32_t MUSIC_LENGTH_MS = USER_MUSIC_MS;
+#else
+const char* const MUSIC_TITLE = TUNE_TITLE;
+uint32_t tuneLengthMs() {
+  uint32_t total = 0;
+  for (const auto& note : TUNE) total += note.eighths * TUNE_EIGHTH_MS;
+  return total;
+}
+const uint32_t MUSIC_LENGTH_MS = tuneLengthMs();
+#endif
 
 void showPage(Page next) {
   if (next != page) dirty = true;
@@ -126,12 +156,52 @@ bool readBool(const char* text, const char* key, bool& out) {
 
 constexpr uint8_t SPEAKER_VOLUME = 200;
 
+void stopMusic() {
+  if (!musicPlaying) return;
+  musicPlaying = false;
+  M5.Speaker.stop(MUSIC_CHANNEL);
+  dirty = true;
+}
+
+void startMusic() {
+  if (!sound) return;  // Respect the shared mute preference.
+  M5.Speaker.setChannelVolume(MUSIC_CHANNEL, MUSIC_VOLUME);
+  musicPlaying = true;
+  musicStartedAt = millis();
+  tuneIndex = 0;
+  nextNoteAt = 0;
+#ifdef HAVE_USER_MUSIC
+  if (!M5.Speaker.playWav(USER_MUSIC, sizeof(USER_MUSIC), 1, MUSIC_CHANNEL, true)) musicPlaying = false;
+#endif
+  dirty = true;
+}
+
+// Advance the tune one note at a time, or notice that the user's clip ended.
+void updateMusic() {
+  if (!musicPlaying) return;
+  const uint32_t now = millis();
+#ifdef HAVE_USER_MUSIC
+  if (now - musicStartedAt > 300 && !M5.Speaker.isPlaying(MUSIC_CHANNEL)) stopMusic();
+#else
+  if (int32_t(now - nextNoteAt) < 0) return;
+  if (tuneIndex >= sizeof(TUNE) / sizeof(TUNE[0])) {
+    stopMusic();
+    return;
+  }
+  const TuneNote note = TUNE[tuneIndex++];
+  const uint32_t length = note.eighths * TUNE_EIGHTH_MS;
+  if (note.frequency > 0) M5.Speaker.tone(note.frequency, length * 9 / 10, MUSIC_CHANNEL, true);
+  nextNoteAt = now + length;
+#endif
+}
+
 void speak(long stage) {
   const uint8_t* clip = stage == 2 ? REMINDER_CLIP_2 : REMINDER_CLIP_1;
   const size_t size = stage == 2 ? sizeof(REMINDER_CLIP_2) : sizeof(REMINDER_CLIP_1);
+  stopMusic();  // A reminder always takes over the speaker.
   M5.Speaker.stop();
-  if (!M5.Speaker.playWav(clip, size)) {
-    M5.Speaker.tone(880, 150);  // Fallback cue if the clip cannot be played.
+  if (!M5.Speaker.playWav(clip, size, 1, SPEECH_CHANNEL, true)) {
+    M5.Speaker.tone(880, 150, SPEECH_CHANNEL);  // Fallback cue if the clip cannot be played.
   }
 }
 
@@ -182,7 +252,9 @@ void handleLine(const char* text) {
   }
 
   if (reminder > 0 && reminder != reminderId && nextSound && linked) speak(stage);
-  else if ((reminder == 0 || !nextSound) && M5.Speaker.isPlaying()) M5.Speaker.stop();
+  else if ((reminder == 0 || !nextSound) && M5.Speaker.isPlaying(SPEECH_CHANNEL)) M5.Speaker.stop(SPEECH_CHANNEL);
+  if (reminder > 0 && reminder != reminderId) stopMusic();
+  if (!nextSound) stopMusic();
   reminderId = reminder;
   sound = nextSound;
   bool camera = false;
@@ -319,7 +391,11 @@ void pollTouch() {
   down = false;
   const int dx = lastX - startX;
   const int dy = lastY - startY;
-  if (abs(dx) < SWIPE_MIN_DX || abs(dy) > SWIPE_MAX_DY) return;  // Taps do nothing.
+  if (abs(dx) <= TAP_MAX_MOVE && abs(dy) <= TAP_MAX_MOVE) {
+    if (page == Page::Music) musicPlaying ? stopMusic() : startMusic();  // Tap: play/stop.
+    return;
+  }
+  if (abs(dx) < SWIPE_MIN_DX || abs(dy) > SWIPE_MAX_DY) return;
   const int step = dx < 0 ? 1 : PAGE_COUNT - 1;  // Swipe left: next page.
   showPage(Page((int(page) + step) % PAGE_COUNT));
 }
@@ -532,6 +608,36 @@ void renderClock() {
   shownMinute = now / 60;
 }
 
+void renderMusic() {
+  const int cx = canvas.width() / 2;
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(GREY);
+  canvas.drawString("Music", cx, 22);
+  canvas.setTextColor(WHITE);
+  canvas.drawString(MUSIC_TITLE, cx, 56);
+  // Play triangle or stop square in a ring.
+  canvas.drawCircle(cx, 118, 34, WHITE);
+  canvas.drawCircle(cx, 118, 33, WHITE);
+  if (musicPlaying) canvas.fillRect(cx - 13, 105, 26, 26, WHITE);
+  else canvas.fillTriangle(cx - 10, 100, cx - 10, 136, cx + 18, 118, WHITE);
+  // Progress bar.
+  const uint32_t elapsed = musicPlaying ? min<uint32_t>(millis() - musicStartedAt, MUSIC_LENGTH_MS) : 0;
+  canvas.drawRoundRect(40, 172, canvas.width() - 80, 8, 4, GREY);
+  if (MUSIC_LENGTH_MS > 0 && elapsed > 0) {
+    canvas.fillRoundRect(40, 172, int64_t(canvas.width() - 80) * elapsed / MUSIC_LENGTH_MS, 8, 4, WHITE);
+  }
+  canvas.setTextColor(GREY);
+  char text[24];
+  if (!sound) {
+    snprintf(text, sizeof(text), "Sound muted");
+  } else {
+    const uint32_t shown = (musicPlaying ? elapsed : MUSIC_LENGTH_MS) / 1000;
+    snprintf(text, sizeof(text), "%s  %lu:%02lu", musicPlaying ? "Tap to stop" : "Tap to play",
+             (unsigned long)(shown / 60), (unsigned long)(shown % 60));
+  }
+  canvas.drawString(text, cx, 200);
+}
+
 void render() {
   const int cx = canvas.width() / 2;
   canvas.fillScreen(BLACK);
@@ -539,10 +645,11 @@ void render() {
     case Page::Face: renderFace(); break;
     case Page::Weather: renderWeather(); break;
     case Page::Clock: renderClock(); break;
+    case Page::Music: renderMusic(); break;
   }
   // Page indicator: one dot per page, the current one filled.
   for (int i = 0; i < PAGE_COUNT; ++i) {
-    const int x = cx + (i - 1) * 14;
+    const int x = cx + (2 * i - (PAGE_COUNT - 1)) * 7;
     if (i == int(page)) canvas.fillCircle(x, canvas.height() - 6, 3, WHITE);
     else canvas.drawCircle(x, canvas.height() - 6, 3, GREY);
   }
@@ -571,6 +678,7 @@ void setup() {
   esp_log_level_set("*", ESP_LOG_NONE);  // Logs would corrupt the frame stream.
   M5.Display.setBrightness(160);
   M5.Speaker.setVolume(SPEAKER_VOLUME);
+  M5.Speaker.setChannelVolume(MUSIC_CHANNEL, MUSIC_VOLUME);
   canvas.setColorDepth(16);
   canvas.createSprite(M5.Display.width(), M5.Display.height());
   canvas.setTextSize(2);
@@ -585,13 +693,23 @@ void loop() {
     linked = false;
     cameraWanted = false;
     M5.Speaker.stop();
+    musicPlaying = false;
     face = Face::Bored;
     reminderId = 0;
     showPage(Page::Face);
     dirty = true;
   }
   pollTouch();
-  if (page != Page::Face && millis() - pageChangedAt > PAGE_TIMEOUT_MS) showPage(Page::Face);
+  updateMusic();
+  if (page != Page::Face && !(page == Page::Music && musicPlaying) &&
+      millis() - pageChangedAt > PAGE_TIMEOUT_MS) {
+    showPage(Page::Face);
+  }
+  static uint32_t lastProgressAt = 0;
+  if (page == Page::Music && musicPlaying && millis() - lastProgressAt > 250) {
+    lastProgressAt = millis();
+    dirty = true;  // Progress bar and time.
+  }
   if (page == Page::Clock && clockEpoch > 0 &&
       (clockEpoch + long((millis() - clockSetAt) / 1000)) / 60 != shownMinute) {
     dirty = true;  // Redraw when the minute changes.
