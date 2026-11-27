@@ -1,5 +1,5 @@
 """Validated camera, perception and behaviour settings loaded by __main__."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 
@@ -86,6 +86,24 @@ class BehaviourConfig(FiniteConfig):
         return settings_from_env(cls, 'POMO_', environ)
 
 
+class WeatherConfig(FiniteConfig):
+    """Robot weather page; only these coordinates are sent to Open-Meteo."""
+    enabled: bool = True
+    latitude: float = Field(default=51.4988, ge=-90, le=90)
+    longitude: float = Field(default=-0.1749, ge=-180, le=180)
+    place: str = Field(default="London", min_length=1, max_length=15, pattern=r"^[ !#-\[\]-~]+$")
+    refresh_seconds: float = Field(default=900, ge=300, le=86400)
+
+    @classmethod
+    def from_env(cls, environ=None):
+        environ = os.environ if environ is None else environ
+        values = {name: environ[f'POMO_WEATHER_{name.upper()}'].strip()
+                  for name in cls.model_fields if f'POMO_WEATHER_{name.upper()}' in environ}
+        if 'enabled' in values:
+            values['enabled'] = _boolean(environ, 'POMO_WEATHER_ENABLED', 'true')
+        return cls(**values)
+
+
 def _boolean(environ, name, default):
     value = environ.get(name, default).strip().lower()
     if value not in {"true", "false"}:
@@ -112,6 +130,7 @@ class Settings:
     behaviour: BehaviourConfig
     serial_port: str = ""
     serial_baudrate: int = 115200
+    weather: WeatherConfig = field(default_factory=lambda: WeatherConfig())
 
     @classmethod
     def from_env(cls, environ=None):
@@ -138,6 +157,7 @@ class Settings:
             camera=CameraConfig.from_env(environ),
             perception=PerceptionConfig.from_env(environ),
             behaviour=BehaviourConfig.from_env(environ),
+            weather=WeatherConfig.from_env(environ),
             dev_controls=_boolean(environ, "POMO_DEV_CONTROLS", "true"),
             sound_enabled=_boolean(environ, "POMO_SOUND_ENABLED", "true"),
             policy=PolicyConfig(

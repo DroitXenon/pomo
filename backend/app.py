@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, TypeAd
 from backend.config import BehaviourConfig, CameraConfig, PerceptionConfig
 from backend.observations import Observation, Presence
 from backend.policy import PolicyConfig, ReminderEngine
+from backend.weather import weather_loop
 
 LOG = logging.getLogger("pomo")
 PROTOCOL_VERSION = 10
@@ -616,7 +617,7 @@ def create_app(
     camera_config: CameraConfig | None = None,
     perception_config: PerceptionConfig | None = None,
     behaviour_config: BehaviourConfig | None = None, processor_factory=None,
-    display_adapter=None,
+    display_adapter=None, weather_config=None,
 ) -> FastAPI:
     if not math.isfinite(tick_interval) or tick_interval <= 0:
         raise ValueError("tick_interval must be finite and positive")
@@ -648,13 +649,17 @@ def create_app(
                 runtime._publish_display(runtime.snapshot())
         await runtime.open_camera()
         ticker = asyncio.create_task(runtime.run(tick_interval)) if run_ticker else None
+        weather = (asyncio.create_task(weather_loop(display_adapter, weather_config))
+                   if display_adapter is not None and weather_config is not None
+                   and weather_config.enabled else None)
         try:
             yield
         finally:
-            if ticker is not None:
-                ticker.cancel()
-                with suppress(asyncio.CancelledError):
-                    await ticker
+            for task in (ticker, weather):
+                if task is not None:
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
             try:
                 if display_adapter is not None:
                     await asyncio.to_thread(display_adapter.close)

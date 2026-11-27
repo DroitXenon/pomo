@@ -12,10 +12,18 @@
 // streams JPEG frames back over the same USB serial link:
 //   "PJPG" | uint32 length | uint32 sequence (little-endian) | JPEG bytes
 // Frames are never stored or shown on the robot.
+//
+// Each line also carries the laptop's local time ("time") and, when available,
+// London weather ("wt", "wh", "wl", "wc", "wp"). Swiping left or right on the
+// screen cycles three pages: face, weather and clock. The robot returns to the
+// face page when the user leaves, a reminder starts, the link drops, or after
+// 30 s on another page, so reminders are never hidden.
 
 #include <M5Unified.h>
 #include <esp_camera.h>
 #include <img_converters.h>
+#include <driver/i2c.h>
+#include <time.h>
 
 #include "clips.h"
 
@@ -30,6 +38,13 @@ constexpr uint32_t FRAME_INTERVAL_MS = 200;  // At most 5 frames per second.
 constexpr uint8_t JPEG_QUALITY = 60;         // 0-100; higher is larger and sharper.
 
 enum class Face { Happy, Sad, Surprised, Bored, Idle };
+enum class Page { Face, Weather, Clock };
+constexpr int PAGE_COUNT = 3;
+constexpr uint32_t PAGE_TIMEOUT_MS = 30000;  // Other pages fall back to the face.
+constexpr int SWIPE_MIN_DX = 60;
+constexpr int SWIPE_MAX_DY = 60;
+constexpr uint32_t TOUCH_POLL_MS = 20;
+constexpr uint8_t TOUCH_ADDRESS = 0x38;  // FT6336 on the internal I2C bus.
 
 M5Canvas canvas(&M5.Display);
 char line[MAX_LINE + 1];
@@ -44,6 +59,22 @@ uint32_t lastMessageAt = 0;
 bool dirty = true;
 bool cameraReady = false;
 volatile bool cameraWanted = false;
+
+Page page = Page::Face;
+uint32_t pageChangedAt = 0;
+long clockEpoch = 0;        // Local wall time (seconds) from the backend; 0 = unknown.
+uint32_t clockSetAt = 0;
+long shownMinute = -1;
+bool haveWeather = false;
+long weatherTemp = 0, weatherHigh = 0, weatherLow = 0;
+char weatherCondition[10] = "";
+char weatherPlace[16] = "";
+
+void showPage(Page next) {
+  if (next != page) dirty = true;
+  page = next;
+  pageChangedAt = millis();
+}
 
 bool parseFace(const char* name, Face& out) {
   if (strcmp(name, "happy") == 0) out = Face::Happy;
@@ -122,6 +153,34 @@ void handleLine(const char* text) {
   // A new active reminder ID is spoken once. The first message after (re)linking
   // is silent so an old reminder is never replayed. Clearing the reminder
   // (return, dismissal, standby) or muting stops speech immediately.
+  // Never hide the face while the user is away or being reminded.
+  if ((reminder > 0 && reminder != reminderId) ||
+      (next != face && (next == Face::Surprised || next == Face::Sad))) {
+    showPage(Page::Face);
+  }
+  long epoch = 0;
+  if (readLong(text, "time", epoch) && epoch > 0) {
+    clockEpoch = epoch;
+    clockSetAt = millis();
+  }
+  long temp = 0, high = 0, low = 0;
+  char cond[sizeof(weatherCondition)];
+  if (readLong(text, "wt", temp) && readLong(text, "wh", high) && readLong(text, "wl", low) &&
+      readString(text, "wc", cond, sizeof(cond))) {
+    char place[sizeof(weatherPlace)] = "";
+    readString(text, "wp", place, sizeof(place));
+    if (!haveWeather || temp != weatherTemp || high != weatherHigh || low != weatherLow ||
+        strcmp(cond, weatherCondition) != 0 || strcmp(place, weatherPlace) != 0) {
+      if (page == Page::Weather) dirty = true;
+    }
+    weatherTemp = temp;
+    weatherHigh = high;
+    weatherLow = low;
+    strcpy(weatherCondition, cond);
+    strcpy(weatherPlace, place);
+    haveWeather = true;
+  }
+
   if (reminder > 0 && reminder != reminderId && nextSound && linked) speak(stage);
   else if ((reminder == 0 || !nextSound) && M5.Speaker.isPlaying()) M5.Speaker.stop();
   reminderId = reminder;
@@ -191,6 +250,80 @@ camera_config_t cameraConfig() {
   return config;
 }
 
+// Touch. The camera driver owns the internal I2C bus (shared with the FT6336
+// touch controller), so M5.Touch cannot be used while it runs. Instead the
+// touch registers are read through the I2C driver the camera installed; the
+// ESP-IDF driver serialises these short reads with the camera's own (rare)
+// sensor accesses. Without a camera, M5Unified's own touch support is used.
+int touchPort = -1;      // I2C port that answered, or -1.
+bool m5Touch = false;    // Fallback when the camera did not start.
+
+bool readTouchRegisters(int port, uint8_t* data, size_t length) {
+  const uint8_t reg = 0x02;  // TD_STATUS, then P1_XH, P1_XL, P1_YH, P1_YL.
+  return i2c_master_write_read_device(i2c_port_t(port), TOUCH_ADDRESS, &reg, 1, data, length,
+                                      pdMS_TO_TICKS(5)) == ESP_OK;
+}
+
+void startTouch() {
+  uint8_t data[5];
+  if (cameraReady) {
+    for (int port : {1, 0}) {
+      if (readTouchRegisters(port, data, sizeof(data))) {
+        touchPort = port;
+        return;
+      }
+    }
+    return;  // No touch: the face page still works, swiping is unavailable.
+  }
+  M5.In_I2C.begin(I2C_NUM_1, 12, 11);
+  m5Touch = true;
+}
+
+bool readTouch(int& x, int& y) {
+  if (m5Touch) {
+    M5.update();
+    if (M5.Touch.getCount() == 0) return false;
+    const auto detail = M5.Touch.getDetail();
+    x = detail.x;
+    y = detail.y;
+    return true;
+  }
+  uint8_t data[5];
+  if (touchPort < 0 || !readTouchRegisters(touchPort, data, sizeof(data))) return false;
+  if ((data[0] & 0x0F) == 0) return false;
+  x = ((data[1] & 0x0F) << 8) | data[2];
+  y = ((data[3] & 0x0F) << 8) | data[4];
+  return true;
+}
+
+void pollTouch() {
+  static uint32_t lastPoll = 0;
+  static bool down = false;
+  static int startX = 0, startY = 0, lastX = 0, lastY = 0;
+  const uint32_t now = millis();
+  if (now - lastPoll < TOUCH_POLL_MS) return;
+  lastPoll = now;
+  int x = 0, y = 0;
+  if (readTouch(x, y)) {
+    if (!down) {
+      down = true;
+      startX = x;
+      startY = y;
+    }
+    lastX = x;
+    lastY = y;
+    pageChangedAt = now;  // Touching counts as activity on the current page.
+    return;
+  }
+  if (!down) return;
+  down = false;
+  const int dx = lastX - startX;
+  const int dy = lastY - startY;
+  if (abs(dx) < SWIPE_MIN_DX || abs(dy) > SWIPE_MAX_DY) return;  // Taps do nothing.
+  const int step = dx < 0 ? 1 : PAGE_COUNT - 1;  // Swipe left: next page.
+  showPage(Page((int(page) + step) % PAGE_COUNT));
+}
+
 // Write a whole frame or report failure. A short write (host stopped reading)
 // leaves a partial frame, which the backend discards when it resynchronises.
 bool sendFrame(const uint8_t* jpeg, size_t length, uint32_t sequence) {
@@ -252,12 +385,11 @@ void drawSmile(int cx, int cy, bool up) {
   }
 }
 
-void render() {
+void renderFace() {
   const int cx = canvas.width() / 2;
   const int eyeY = 90;
   const int mouthY = 165;
   const uint32_t now = millis();
-  canvas.fillScreen(BLACK);
 
   switch (face) {
     case Face::Happy:
@@ -295,11 +427,130 @@ void render() {
       canvas.drawWideLine(cx - 15, mouthY, cx + 15, mouthY, 3, GREY);
       break;
   }
+}
+
+void drawCloud(int x, int y, uint16_t color) {
+  canvas.fillCircle(x - 18, y + 6, 14, color);
+  canvas.fillCircle(x + 4, y - 4, 20, color);
+  canvas.fillCircle(x + 24, y + 6, 13, color);
+  canvas.fillRoundRect(x - 32, y + 4, 70, 18, 9, color);
+}
+
+void drawSun(int x, int y, int r) {
+  canvas.fillCircle(x, y, r, WHITE);
+  for (int i = 0; i < 8; ++i) {
+    const float a = i * PI / 4;
+    canvas.drawWideLine(x + cosf(a) * (r + 6), y + sinf(a) * (r + 6),
+                        x + cosf(a) * (r + 14), y + sinf(a) * (r + 14), 3, WHITE);
+  }
+}
+
+// Simple monochrome icons drawn with primitives, centred on (x, y).
+void drawWeatherIcon(int x, int y, const char* cond) {
+  if (strcmp(cond, "clear") == 0) {
+    drawSun(x, y, 18);
+  } else if (strcmp(cond, "partly") == 0) {
+    drawSun(x - 14, y - 12, 13);
+    drawCloud(x + 6, y + 8, WHITE);
+  } else if (strcmp(cond, "fog") == 0) {
+    for (int i = 0; i < 4; ++i) canvas.drawWideLine(x - 34, y - 18 + i * 12, x + 34, y - 18 + i * 12, 4, GREY);
+  } else {
+    drawCloud(x, y - 6, strcmp(cond, "cloudy") == 0 ? WHITE : GREY);
+    if (strcmp(cond, "rain") == 0) {
+      for (int i = -1; i <= 1; ++i) canvas.drawWideLine(x + i * 18, y + 24, x + i * 18 - 6, y + 38, 3, WHITE);
+    } else if (strcmp(cond, "snow") == 0) {
+      for (int i = -1; i <= 1; ++i) canvas.fillCircle(x + i * 18, y + 32, 4, WHITE);
+    } else if (strcmp(cond, "storm") == 0) {
+      canvas.fillTriangle(x + 2, y + 18, x - 10, y + 36, x + 2, y + 34, WHITE);
+      canvas.fillTriangle(x + 2, y + 30, x - 2, y + 48, x + 12, y + 28, WHITE);
+    }
+  }
+}
+
+const char* conditionLabel(const char* cond) {
+  if (strcmp(cond, "clear") == 0) return "Clear";
+  if (strcmp(cond, "partly") == 0) return "Partly cloudy";
+  if (strcmp(cond, "cloudy") == 0) return "Cloudy";
+  if (strcmp(cond, "fog") == 0) return "Fog";
+  if (strcmp(cond, "rain") == 0) return "Rain";
+  if (strcmp(cond, "snow") == 0) return "Snow";
+  if (strcmp(cond, "storm") == 0) return "Storm";
+  return cond;
+}
+
+void renderWeather() {
+  const int cx = canvas.width() / 2;
+  canvas.setTextColor(WHITE);
+  if (!haveWeather) {
+    canvas.setTextDatum(middle_center);
+    canvas.drawString("No weather", cx, canvas.height() / 2);
+    return;
+  }
+  drawWeatherIcon(80, 92, weatherCondition);
+  char text[24];
+  snprintf(text, sizeof(text), "%ld", weatherTemp);
+  canvas.setFont(&fonts::FreeSansBold24pt7b);
+  canvas.setTextSize(1);
+  canvas.setTextDatum(middle_left);
+  canvas.drawString(text, 160, 92);
+  const int degreeX = 160 + canvas.textWidth(text) + 8;
+  canvas.drawCircle(degreeX, 76, 5, WHITE);
+  canvas.drawCircle(degreeX, 76, 4, WHITE);
+  canvas.setFont(&fonts::Font0);
+  canvas.setTextSize(2);
+  canvas.setTextDatum(middle_center);
+  canvas.drawString(conditionLabel(weatherCondition), cx, 158);
+  canvas.setTextColor(GREY);
+  snprintf(text, sizeof(text), "H %ld  L %ld", weatherHigh, weatherLow);
+  canvas.drawString(text, cx, 184);
+  if (weatherPlace[0]) canvas.drawString(weatherPlace, cx, 22);
+}
+
+void renderClock() {
+  const int cx = canvas.width() / 2;
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(WHITE);
+  if (clockEpoch <= 0) {
+    canvas.setTextSize(4);
+    canvas.drawString("--:--", cx, 100);
+    canvas.setTextSize(2);
+    return;
+  }
+  time_t now = clockEpoch + time_t((millis() - clockSetAt) / 1000);
+  struct tm local;
+  gmtime_r(&now, &local);  // The backend already sent local time.
+  char text[24];
+  strftime(text, sizeof(text), "%H:%M", &local);
+  canvas.setFont(&fonts::Font7);  // Seven-segment digits, 48 px.
+  canvas.setTextSize(1.5);
+  canvas.drawString(text, cx, 100);
+  canvas.setFont(&fonts::Font0);
+  canvas.setTextSize(2);
+  canvas.setTextColor(GREY);
+  strftime(text, sizeof(text), "%a %d %b", &local);
+  canvas.drawString(text, cx, 178);
+  shownMinute = now / 60;
+}
+
+void render() {
+  const int cx = canvas.width() / 2;
+  canvas.fillScreen(BLACK);
+  switch (page) {
+    case Page::Face: renderFace(); break;
+    case Page::Weather: renderWeather(); break;
+    case Page::Clock: renderClock(); break;
+  }
+  // Page indicator: one dot per page, the current one filled.
+  for (int i = 0; i < PAGE_COUNT; ++i) {
+    const int x = cx + (i - 1) * 14;
+    if (i == int(page)) canvas.fillCircle(x, canvas.height() - 6, 3, WHITE);
+    else canvas.drawCircle(x, canvas.height() - 6, 3, GREY);
+  }
 
   canvas.setTextColor(GREY);
   if (!linked) {
     canvas.setTextDatum(bottom_center);
-    canvas.drawString("No link", cx, canvas.height() - 8);
+    canvas.drawString("No link", cx, canvas.height() - 14);
   }
   if (!cameraReady) {
     canvas.setTextDatum(top_left);
@@ -324,6 +575,7 @@ void setup() {
   canvas.createSprite(M5.Display.width(), M5.Display.height());
   canvas.setTextSize(2);
   startCamera();
+  startTouch();
   render();
 }
 
@@ -335,12 +587,20 @@ void loop() {
     M5.Speaker.stop();
     face = Face::Bored;
     reminderId = 0;
+    showPage(Page::Face);
     dirty = true;
   }
-  // The crying face animates; other faces redraw only when they change.
-  if (dirty || face == Face::Sad) {
+  pollTouch();
+  if (page != Page::Face && millis() - pageChangedAt > PAGE_TIMEOUT_MS) showPage(Page::Face);
+  if (page == Page::Clock && clockEpoch > 0 &&
+      (clockEpoch + long((millis() - clockSetAt) / 1000)) / 60 != shownMinute) {
+    dirty = true;  // Redraw when the minute changes.
+  }
+  // The crying face animates; other pages redraw only when they change.
+  const bool animating = page == Page::Face && face == Face::Sad;
+  if (dirty || animating) {
     render();
     dirty = false;
   }
-  delay(face == Face::Sad ? 30 : 10);
+  delay(animating ? 30 : 10);
 }
